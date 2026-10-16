@@ -1,0 +1,160 @@
+-- The database is rebuilt from the data file on every start.
+-- raw_resources keeps every line exactly as received.
+-- The clean tables hold only valid values (invalid ones become NULL).
+-- issues explains every problem, and points back to the raw line.
+
+CREATE TABLE raw_resources (
+  id            INTEGER PRIMARY KEY,   -- equals the line number in the file
+  resource_type TEXT,
+  fhir_id       TEXT,
+  patient_ref   TEXT,                  -- patient link as written, for any type
+  patient_id    TEXT,                  -- resolved patient, set in pass 2
+  parsed_ok     INTEGER NOT NULL,
+  raw_json      TEXT,                  -- original JSON when it parsed
+  raw_text      TEXT                   -- original text when it did not parse
+);
+CREATE INDEX idx_raw_type_id ON raw_resources(resource_type, fhir_id);
+CREATE INDEX idx_raw_patient ON raw_resources(patient_id);
+
+CREATE TABLE patients (
+  id              TEXT PRIMARY KEY,
+  raw_resource_id INTEGER NOT NULL,
+  full_name       TEXT,
+  family_name     TEXT,
+  given_names     TEXT,
+  gender          TEXT,
+  birth_date      TEXT,
+  deceased_date   TEXT,
+  active          INTEGER
+);
+
+CREATE TABLE observations (
+  id              TEXT PRIMARY KEY,
+  raw_resource_id INTEGER NOT NULL,
+  patient_ref     TEXT,
+  patient_id      TEXT,
+  code_system     TEXT,
+  lab_test_code   TEXT,
+  name            TEXT,
+  label           TEXT,
+  status          TEXT,
+  measured_at     TEXT,
+  value           REAL,
+  value_text      TEXT,
+  unit            TEXT,
+  last_updated    TEXT,
+  issued          TEXT,
+  is_primary      INTEGER NOT NULL DEFAULT 1,  -- 0 when another record in its duplicate group wins
+  replaced_by     TEXT,                        -- set when an amended record replaces this one
+  is_impossible   INTEGER NOT NULL DEFAULT 0,  -- hidden by default
+  is_implausible  INTEGER NOT NULL DEFAULT 0   -- shown with a warning, excluded from research
+);
+CREATE INDEX idx_obs_patient ON observations(patient_id);
+CREATE INDEX idx_obs_code ON observations(code_system, lab_test_code);
+
+CREATE TABLE observation_components (
+  observation_id TEXT NOT NULL,
+  code_system    TEXT,
+  lab_test_code  TEXT,
+  name           TEXT,
+  value          REAL,
+  value_text     TEXT,
+  unit           TEXT
+);
+CREATE INDEX idx_comp_obs ON observation_components(observation_id);
+
+CREATE TABLE conditions (
+  id                  TEXT PRIMARY KEY,
+  raw_resource_id     INTEGER NOT NULL,
+  patient_ref         TEXT,
+  patient_id          TEXT,
+  code_system         TEXT,
+  disease_code        TEXT,
+  name                TEXT,
+  label               TEXT,
+  clinical_status     TEXT,
+  verification_status TEXT,
+  onset_date          TEXT
+);
+CREATE INDEX idx_cond_patient ON conditions(patient_id);
+CREATE INDEX idx_cond_code ON conditions(code_system, disease_code);
+
+CREATE TABLE medications (
+  id              TEXT PRIMARY KEY,
+  raw_resource_id INTEGER NOT NULL,
+  patient_ref     TEXT,
+  patient_id      TEXT,
+  code_system     TEXT,
+  drug_code       TEXT,
+  name            TEXT,
+  label           TEXT,
+  status          TEXT,
+  intent          TEXT,
+  prescribed_at   TEXT,
+  dosage          TEXT
+);
+CREATE INDEX idx_med_patient ON medications(patient_id);
+
+CREATE TABLE procedures (
+  id              TEXT PRIMARY KEY,
+  raw_resource_id INTEGER NOT NULL,
+  patient_ref     TEXT,
+  patient_id      TEXT,
+  code_system     TEXT,
+  procedure_code  TEXT,
+  name            TEXT,
+  label           TEXT,
+  status          TEXT,
+  performed_at    TEXT,
+  performer       TEXT
+);
+CREATE INDEX idx_proc_patient ON procedures(patient_id);
+
+CREATE TABLE document_references (
+  id              TEXT PRIMARY KEY,
+  raw_resource_id INTEGER NOT NULL,
+  patient_ref     TEXT,
+  patient_id      TEXT,
+  status          TEXT,
+  note_type       TEXT,
+  note_type_code  TEXT,
+  date            TEXT,
+  author          TEXT
+);
+CREATE INDEX idx_doc_patient ON document_references(patient_id);
+
+-- Binary content. Inline attachments are stored here too, with a generated id.
+CREATE TABLE binaries (
+  id              TEXT PRIMARY KEY,
+  raw_resource_id INTEGER NOT NULL,
+  content_type    TEXT NOT NULL,    -- the type we trust (declared, or detected from the bytes)
+  size_bytes      INTEGER,
+  text            TEXT,             -- decoded text, only for readable text content
+  data            BLOB,             -- decoded bytes, NULL when invalid or too large
+  is_inline       INTEGER NOT NULL DEFAULT 0
+);
+
+-- Many to many: a note can have several attachments, and notes can share a Binary.
+CREATE TABLE document_attachments (
+  document_id  TEXT NOT NULL,
+  binary_id    TEXT NOT NULL,
+  content_type TEXT,               -- what the note says the attachment is
+  PRIMARY KEY (document_id, binary_id)
+);
+CREATE INDEX idx_att_binary ON document_attachments(binary_id);
+
+CREATE TABLE issues (
+  id              INTEGER PRIMARY KEY,
+  raw_resource_id INTEGER,          -- the line the problem is on
+  record_type     TEXT,
+  record_id       TEXT,
+  issue_type      TEXT NOT NULL,
+  severity        TEXT NOT NULL,    -- error, warning or info
+  field           TEXT,
+  detail          TEXT,
+  action_taken    TEXT,
+  group_key       TEXT              -- ties together records in the same duplicate or correction group
+);
+CREATE INDEX idx_issue_raw ON issues(raw_resource_id);
+CREATE INDEX idx_issue_type ON issues(issue_type);
+CREATE INDEX idx_issue_group ON issues(group_key);
