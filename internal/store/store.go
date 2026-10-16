@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	_ "modernc.org/sqlite" // pure Go SQLite driver, so the Docker build needs no C compiler
 )
@@ -18,6 +19,9 @@ var schemaSQL string
 // results repeatable: the same file always gives the same tables.
 func Open(path string) (*sql.DB, error) {
 	if path != ":memory:" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, fmt.Errorf("create database folder: %w", err)
+		}
 		for _, suffix := range []string{"", "-wal", "-shm"} {
 			if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
 				return nil, fmt.Errorf("remove old database: %w", err)

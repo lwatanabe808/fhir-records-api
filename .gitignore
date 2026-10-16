@@ -1,3 +1,6 @@
 *.db
 *.db-*
 /server
+/db/
+# 7.6 MB; rebuild with make scenarios
+/testdata/scenarios/12-bulk.jsonl

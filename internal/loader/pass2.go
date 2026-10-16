@@ -287,7 +287,7 @@ func (l *Loader) groupObservations() error {
 		FROM observations o
 		WHERE o.patient_id IS NOT NULL AND o.lab_test_code IS NOT NULL AND o.measured_at LIKE '%T%'
 		  AND coalesce(o.status, '') <> 'entered-in-error'
-		ORDER BY grp, o.id`)
+		ORDER BY o.patient_id, o.lab_test_code, o.measured_at, o.code_system, o.id`)
 	if err != nil {
 		return err
 	}

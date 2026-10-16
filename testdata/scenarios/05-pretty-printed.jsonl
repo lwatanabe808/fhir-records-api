@@ -1,0 +1,26 @@
+{"resourceType": "Patient", "id": "pt-500", "name": [{"family": "Print", "given": ["Pretty"]}], "gender": "female", "birthDate": "1970-01-01"}
+{
+  "resourceType": "Observation",
+  "id": "ob-500",
+  "status": "final",
+  "code": {
+    "coding": [
+      {
+        "system": "http://loinc.org",
+        "code": "4548-4",
+        "display": "Hemoglobin A1c"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/pt-500"
+  },
+  "effectiveDateTime": "2025-01-01T08:00:00Z",
+  "valueQuantity": {
+    "value": 6.0,
+    "unit": "%",
+    "system": "http://unitsofmeasure.org",
+    "code": "%"
+  }
+}
+{"resourceType": "Observation", "id": "ob-501", "status": "final", "code": {"coding": [{"system": "http://loinc.org", "code": "4548-4", "display": "Hemoglobin A1c"}]}, "subject": {"reference": "Patient/pt-500"}, "effectiveDateTime": "2025-02-01T08:00:00Z", "valueQuantity": {"value": 6.1, "unit": "%", "system": "http://unitsofmeasure.org", "code": "%"}}

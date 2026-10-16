@@ -27,6 +27,8 @@ CREATE TABLE patients (
   deceased_date   TEXT,
   active          INTEGER
 );
+CREATE INDEX idx_patient_birth ON patients(birth_date);
+CREATE INDEX idx_patient_family ON patients(family_name, given_names);
 
 CREATE TABLE observations (
   id              TEXT PRIMARY KEY,
@@ -49,8 +51,10 @@ CREATE TABLE observations (
   is_impossible   INTEGER NOT NULL DEFAULT 0,  -- hidden by default
   is_implausible  INTEGER NOT NULL DEFAULT 0   -- shown with a warning, excluded from research
 );
-CREATE INDEX idx_obs_patient ON observations(patient_id);
-CREATE INDEX idx_obs_code ON observations(code_system, lab_test_code);
+-- A patient's results for one test, newest first (patient views, summary, duplicate check).
+CREATE INDEX idx_obs_patient_test ON observations(patient_id, lab_test_code, measured_at);
+-- Everyone's results for one test (research cohort and lab summary).
+CREATE INDEX idx_obs_test_patient ON observations(lab_test_code, patient_id, measured_at);
 
 CREATE TABLE observation_components (
   observation_id TEXT NOT NULL,
@@ -77,7 +81,7 @@ CREATE TABLE conditions (
   onset_date          TEXT
 );
 CREATE INDEX idx_cond_patient ON conditions(patient_id);
-CREATE INDEX idx_cond_code ON conditions(code_system, disease_code);
+CREATE INDEX idx_cond_code ON conditions(disease_code, patient_id);
 
 CREATE TABLE medications (
   id              TEXT PRIMARY KEY,
@@ -94,6 +98,7 @@ CREATE TABLE medications (
   dosage          TEXT
 );
 CREATE INDEX idx_med_patient ON medications(patient_id);
+CREATE INDEX idx_med_code ON medications(drug_code, patient_id);
 
 CREATE TABLE procedures (
   id              TEXT PRIMARY KEY,
@@ -158,3 +163,5 @@ CREATE TABLE issues (
 CREATE INDEX idx_issue_raw ON issues(raw_resource_id);
 CREATE INDEX idx_issue_type ON issues(issue_type);
 CREATE INDEX idx_issue_group ON issues(group_key);
+CREATE INDEX idx_issue_record ON issues(record_type, record_id);
+CREATE INDEX idx_issue_severity ON issues(severity);

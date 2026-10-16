@@ -36,7 +36,7 @@ func (rec *recordCtx) patientRef() (string, error) {
 	if field == "" {
 		return "", rec.issue(NoPatientLink, Warning, "subject", "record has no patient link", "left unlinked")
 	}
-	if rec.flagged[field] {
+	if rec.flagged[field] || rec.flagged[field+"/reference"] {
 		return "", nil // the schema check already reported a badly shaped link
 	}
 	subject, isObject := rec.r[field].(map[string]any)

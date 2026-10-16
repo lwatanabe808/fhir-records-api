@@ -20,7 +20,7 @@ import (
 
 func main() {
 	dataFile := env("DATA_FILE", "data/fhir-resources.jsonl")
-	dbPath := env("DB_PATH", "novellia.db")
+	dbPath := env("DB_PATH", "db/novellia.db")
 	port := env("PORT", "8080")
 	maxBinaryMB := envInt("MAX_BINARY_MB", 5)
 	maxRecordMB := envInt("MAX_RECORD_MB", 10)
@@ -51,6 +51,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load data: %v", err)
 	}
+	log.Printf("database: %s", dbPath)
 	log.Printf("loaded %s: %d lines, %d loaded, %d raw only, %d failed, %d issues (see GET /data-quality/summary) in %dms",
 		dataFile, summary.Lines, summary.Loaded, summary.RawOnly, summary.Failed, summary.IssueCount, summary.DurationMS)
 

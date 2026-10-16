@@ -1,0 +1,7 @@
+{"resourceType": "Patient", "id": "pt-600", "name": [{"family": "Supported", "given": ["Una"]}], "gender": "female", "birthDate": "1988-08-08"}
+{"resourceType": "Encounter", "id": "en-600", "status": "finished", "class": {"code": "AMB"}, "subject": {"reference": "Patient/pt-600"}}
+{"resourceType": "AllergyIntolerance", "id": "al-600", "patient": {"reference": "Patient/pt-600"}, "code": {"text": "Penicillin"}}
+{"resourceType": "Immunization", "id": "im-600", "status": "completed", "vaccineCode": {"text": "Flu"}, "patient": {"reference": "Patient/pt-600"}, "occurrenceDateTime": "2024-10-01"}
+{"resourceType": "Practitioner", "id": "dr-who", "name": [{"family": "Who"}]}
+{"resourceType": "Bundle", "id": "bu-600", "type": "collection", "entry": [{"resource": {"resourceType": "Observation", "id": "ob-600", "status": "final", "code": {"coding": [{"system": "http://loinc.org", "code": "4548-4", "display": "Hemoglobin A1c"}]}, "subject": {"reference": "Patient/pt-600"}, "effectiveDateTime": "2025-01-01T08:00:00Z", "valueQuantity": {"value": 6.0, "unit": "%", "system": "http://unitsofmeasure.org", "code": "%"}}}]}
+{"resourceType": "Observaton", "id": "typo-600", "subject": {"reference": "Patient/pt-600"}}

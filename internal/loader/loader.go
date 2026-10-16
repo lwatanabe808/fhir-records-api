@@ -316,7 +316,7 @@ func (l *Loader) schemaCheck(rec *recordCtx) error {
 			issueType, action = InvalidDate, "date stored as null"
 		case p.Keyword == "type" && strings.Contains(field, "value"):
 			issueType, action = InvalidValueType, "value stored as null"
-		case p.Keyword == "type" && (field == "subject" || field == "patient"):
+		case (p.Keyword == "type" || p.Keyword == "pattern") && isPatientLinkField(field):
 			issueType, action = InvalidReference, "left unlinked"
 		}
 		rec.flagged[field] = true
@@ -325,6 +325,12 @@ func (l *Loader) schemaCheck(rec *recordCtx) error {
 		}
 	}
 	return nil
+}
+
+// isPatientLinkField reports whether a schema error is about the patient link,
+// such as "subject" or "subject/reference".
+func isPatientLinkField(field string) bool {
+	return field == "subject" || field == "patient" || strings.HasPrefix(field, "subject/") || strings.HasPrefix(field, "patient/")
 }
 
 func isDateField(field string) bool {

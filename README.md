@@ -13,12 +13,17 @@ make docker            # builds the image (tests run during the build) and start
 or without Make:
 ```bash
 docker build -t novellia-fhir-api .
-docker run --rm -p 8080:8080 novellia-fhir-api
+docker run --rm -p 8080:8080 -v "$(pwd)/db:/app/db" novellia-fhir-api
 ```
 
 **Without Docker** (needs Go 1.26+):
 ```bash
 make run
+```
+
+**See the database:** on every start, the app writes the SQLite file to `db/novellia.db` in the project folder (with `make run` and `make docker`). Open it with the VS Code extension **SQLite Viewer**, DB Browser for SQLite, or:
+```bash
+sqlite3 -header -column db/novellia.db "SELECT * FROM issues"
 ```
 
 **Try it:**
@@ -44,7 +49,7 @@ make test
 |---|---|---|
 | `DATA_FILE` | `data/fhir-resources.jsonl` | The JSONL file to load |
 | `PORT` | `8080` | HTTP port |
-| `DB_PATH` | `novellia.db` (`:memory:` in Docker) | SQLite file, rebuilt on every start |
+| `DB_PATH` | `db/novellia.db` (`/app/db/novellia.db` in Docker) | SQLite file, rebuilt on every start. Use `:memory:` to skip the file. |
 | `MAX_BINARY_MB` | `5` | Decoded attachments over this size are not stored |
 | `MAX_RECORD_MB` | `10` | Non-Binary lines over this size are not processed |
 | `RESEARCH_ID_SECRET` | dev default | Key for the de-identified research ids. Set it in any real environment. |
@@ -140,6 +145,7 @@ raw_resources ─┬─ patients
 - `observations` has `is_primary` and `replaced_by` for duplicates and corrections, and `is_impossible` / `is_implausible` flags.
 - `document_attachments` is a link table because a note can have several attachments and several notes can share one Binary. Inline attachments (base64 inside the note) are stored in `binaries` with a generated id like `docref-001-inline-1`.
 - `issues` has a `group_key` that ties together records in the same duplicate or correction group.
+- Indexes match how the data is read: a patient's results for one test, everyone's results for one test (research), codes for cohort filters, and issues by record, type, severity and group. Checked with `EXPLAIN QUERY PLAN`. Name search uses `LIKE '%...%'`, which can't use an index; full-text search (SQLite FTS5) would fix that at scale.
 
 The full schema is in [internal/store/schema.sql](internal/store/schema.sql).
 
@@ -208,6 +214,25 @@ Each case below is covered by a test in [internal/loader/loader_test.go](interna
 
 **What the sample file triggers:** `med-nw-003` (capital letters, linked), `obs-nw-006` (unknown patient), `obs-kl-bad-001` (name only), `cond-nw-bad-001` (no disease code), `obs-nw-002` / `obs-nw-dup-001` (A1c 7.8 vs 7.9 at the same time), `obs-ti-003` (replaced by the amended `obs-ti-005`), `med-fd-002` (empty dosage list), `note-robby-001` (`ClinicalNote` is not FHIR).
 
+## Test input files
+
+Besides the sample file, [testdata/scenarios](testdata/scenarios) has input files that each test one kind of situation. Each one is checked by a test in [internal/loader/scenarios_test.go](internal/loader/scenarios_test.go). Try any of them with `make run DATA=testdata/scenarios/<file>`.
+
+| File | What it tests | Expected result |
+|---|---|---|
+| `01-clean-new-patients` | New patients, new lab codes (grip strength), time zones, partial dates, accented names | Everything loads, 0 issues |
+| `02-reverse-order` | Notes before their Binary, labs before their patient | All links resolve, 0 issues |
+| `03-line-endings` | Windows line endings, blank lines, no final line break | 3 records load, blank lines skipped |
+| `04-all-broken` | 11 lines broken in different ways | No crash, one issue per line |
+| `05-pretty-printed` | One record spread over many lines | Fragments flagged, records around it load |
+| `06-unsupported-types` | Encounter, Immunization, Bundle, a misspelled type | Kept raw, still found by patient |
+| `07-patient-links` | Ids that differ only by capital letters, links to groups and web addresses, empty links | Ambiguous links never guessed |
+| `08-dates` | Partial dates, time zones, same day with no time, after death, February 30 | Date-only readings not treated as duplicates |
+| `09-two-clinics` | Same person from two clinics, repeated and corrected records, `meta.lastUpdated` | Patients never merged, newest version kept |
+| `10-attachments` | PDF, HTML, inline data, a Binary shared by two notes, an image labeled as text | Each stored with the right type and text |
+| `11-values` | Other units, zero, negative, huge, wrong types, `dataAbsentReason` | Impossible hidden, implausible flagged |
+| `12-bulk` | 22,000 records (built by `make scenarios`, not kept in git) | Loads in about 3 seconds |
+
 ## Key decisions and tradeoffs
 
 - **Go, standard library router, SQLite.** Go 1.22+ routing handles path patterns without a framework. SQLite needs no server, and the pure Go driver means the Docker image needs no C compiler.
@@ -237,6 +262,8 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 
 ## With more time
 
+- **Exact decimals.** Lab values are stored as floating point numbers, which is fine for filtering and display but drops FHIR's decimal precision (`7.80` vs `7.8`). The original text is kept in `raw_resources`; a clean column for it would be next.
+- **Code checks against LOINC and SNOMED** through a terminology server, so a code that doesn't exist gets flagged. Today only the presence of a code and its code system is checked.
 - **Fetch web address attachments** from the source system using the patient's portal connection, and store large files in a private, encrypted S3 bucket, served through short-lived pre-signed URLs.
 - **Implausible values from data** at scale: percentiles or median-based ranges per test, not means and standard deviations, which outliers distort.
 - **Code and label checks** using medical synonym data or an LLM that flags suspicious pairs for a person to review.

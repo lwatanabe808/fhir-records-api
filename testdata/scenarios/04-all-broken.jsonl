@@ -1,0 +1,11 @@
+{"resourceType":"Patient","id":"cut-off"
+{'resourceType': 'Patient'}
+{"resourceType":"Patient","id":"trailing-comma",}
+null
+42
+"just a string"
+[]
+{}
+{"resourceType": 7, "id": "number-type"}
+{"resourceType": "", "id": "empty-type"}
+not json at all

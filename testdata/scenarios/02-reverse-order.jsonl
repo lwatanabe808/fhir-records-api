@@ -1,0 +1,4 @@
+{"resourceType": "DocumentReference", "id": "dr-200", "status": "current", "subject": {"reference": "Patient/pt-200"}, "date": "2025-01-01T00:00:00Z", "content": [{"attachment": {"contentType": "text/plain", "url": "Binary/bn-200"}}]}
+{"resourceType": "Observation", "id": "ob-200", "status": "final", "code": {"coding": [{"system": "http://loinc.org", "code": "4548-4", "display": "Hemoglobin A1c"}]}, "subject": {"reference": "Patient/pt-200"}, "effectiveDateTime": "2025-01-01T08:00:00Z", "valueQuantity": {"value": 7.1, "unit": "%", "system": "http://unitsofmeasure.org", "code": "%"}}
+{"resourceType": "Binary", "id": "bn-200", "contentType": "text/plain", "data": "V3JpdHRlbiBiZWZvcmUgdGhlIHBhdGllbnQgbGluZS4="}
+{"resourceType": "Patient", "id": "pt-200", "name": [{"family": "Lovelace", "given": ["Ada"]}], "gender": "female", "birthDate": "1985-12-10"}
