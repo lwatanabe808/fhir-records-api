@@ -30,7 +30,7 @@ func newTestServer(t *testing.T, file string) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewServer(db, sum, "test-secret")
+	return NewServer(db, sum, Options{ResearchIDSecret: "test-secret", MinCellSize: 5})
 }
 
 func get(t *testing.T, h http.Handler, path string, wantStatus int) string {
@@ -175,5 +175,129 @@ func TestSummary(t *testing.T) {
 		if lab["code"] == "4548-4" && lab["value"] != 7.4 {
 			t.Errorf("latest A1c = %v, want 7.4", lab["value"])
 		}
+	}
+}
+
+func TestRecordHistory(t *testing.T) {
+	h := newTestServer(t, "../../testdata/scenarios/09-two-clinics.jsonl")
+	// a-ob-3 appears twice; the first copy has the newer meta.lastUpdated, so it stays current.
+	body := get(t, h, "/fhir/Observation/a-ob-3/history", http.StatusOK)
+	var resp struct {
+		Versions []struct {
+			Version int    `json:"version"`
+			Status  string `json:"status"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Versions) != 2 || resp.Versions[0].Status != "current" || resp.Versions[1].Status != "replaced" {
+		t.Errorf("unexpected history: %s", body)
+	}
+	body = get(t, h, "/fhir/Observation/a-ob-2/history", http.StatusOK)
+	if !strings.Contains(body, "identical copy, skipped") {
+		t.Errorf("expected the identical copy to be marked: %s", body)
+	}
+	get(t, h, "/fhir/Observation/nope/history", http.StatusNotFound)
+}
+
+func TestCohortExclusionAndProcedure(t *testing.T) {
+	h := newTestServer(t, "../../data/fhir-resources.jsonl")
+	count := func(path string) int {
+		var resp struct {
+			Count int `json:"count"`
+		}
+		json.Unmarshal([]byte(get(t, h, path, http.StatusOK)), &resp)
+		return resp.Count
+	}
+	diabetes := count("/research/cohort?condition=diabetes")
+	if diabetes == 0 {
+		t.Fatal("expected patients with diabetes")
+	}
+	// Noah has diabetes and high cholesterol; excluding cholesterol must drop him.
+	if got := count("/research/cohort?condition=diabetes&excludeCondition=hypercholesterolemia"); got != diabetes-1 {
+		t.Errorf("exclusion: got %d, want %d", got, diabetes-1)
+	}
+	if got := count("/research/cohort?procedure=colonoscopy"); got != 1 {
+		t.Errorf("procedure filter: got %d, want 1", got)
+	}
+	if got := count("/research/cohort?excludeProcedure=colonoscopy"); got != 15 {
+		t.Errorf("procedure exclusion: got %d, want 15", got)
+	}
+}
+
+func TestCohortCountsPossibleDuplicates(t *testing.T) {
+	h := newTestServer(t, "../../testdata/scenarios/09-two-clinics.jsonl")
+	body := get(t, h, "/research/cohort", http.StatusOK)
+	var resp struct {
+		Count    int              `json:"count"`
+		Dups     int              `json:"possibleDuplicatePatients"`
+		Unique   int              `json:"countWithoutDuplicates"`
+		Patients []map[string]any `json:"patients"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Count != 2 || resp.Dups != 1 || resp.Unique != 1 {
+		t.Errorf("want count 2, 1 possible duplicate, 1 without duplicates: %s", body)
+	}
+	if _, ok := resp.Patients[0]["possibleDuplicateOf"]; !ok {
+		t.Errorf("expected possibleDuplicateOf on each patient: %s", body)
+	}
+	if strings.Contains(body, "clinic-a-1") || strings.Contains(body, "Rosa") {
+		t.Error("duplicate info must not leak patient ids or names")
+	}
+}
+
+func TestNoteSearch(t *testing.T) {
+	h := newTestServer(t, "../../data/fhir-resources.jsonl")
+	if body := get(t, h, "/patients/noah-wyle/notes?q=SHIFT", http.StatusOK); !strings.Contains(body, "docref-001") {
+		t.Errorf("search should be case-insensitive and find docref-001: %s", body)
+	}
+	if body := get(t, h, "/patients/noah-wyle/notes?q=zebra", http.StatusOK); strings.TrimSpace(body) != "[]" {
+		t.Errorf("expected no matches: %s", body)
+	}
+	if body := get(t, h, "/patients/noah-wyle/notes?q=%25", http.StatusOK); strings.TrimSpace(body) != "[]" {
+		t.Errorf("a %% in the search must match literally, not everything: %s", body)
+	}
+	// Another patient's note text is never searched.
+	if body := get(t, h, "/patients/noah-wyle/notes?q=Utahs", http.StatusOK); strings.TrimSpace(body) != "[]" {
+		t.Errorf("found another patient's note: %s", body)
+	}
+}
+
+func TestDatasetProfile(t *testing.T) {
+	h := newTestServer(t, "../../data/fhir-resources.jsonl")
+	body := get(t, h, "/research/dataset-profile", http.StatusOK)
+	var resp struct {
+		Patients     int                       `json:"patients"`
+		Completeness map[string]float64        `json:"completenessPercent"`
+		Coding       map[string]map[string]any `json:"codingStandards"`
+		Population   map[string]map[string]any `json:"population"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Patients != 16 {
+		t.Errorf("patients = %d", resp.Patients)
+	}
+	if resp.Completeness["conditionsWithDiseaseCode"] != 95.7 { // 22 of 23: cond-nw-bad-001 has none
+		t.Errorf("conditionsWithDiseaseCode = %v", resp.Completeness["conditionsWithDiseaseCode"])
+	}
+	if resp.Coding["observations"]["LOINC"] != 100.0 {
+		t.Errorf("observation coding = %v", resp.Coding["observations"])
+	}
+	// 16 patients split into age bands: small bands must be hidden.
+	hidden := false
+	for _, v := range resp.Population["ageBands"] {
+		if v == "<5" {
+			hidden = true
+		}
+	}
+	if !hidden {
+		t.Errorf("expected small age bands shown as <5: %v", resp.Population["ageBands"])
+	}
+	if strings.Contains(body, "noah") || strings.Contains(body, "Wyle") {
+		t.Error("profile must not contain patient details")
 	}
 }

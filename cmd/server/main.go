@@ -24,6 +24,7 @@ func main() {
 	port := env("PORT", "8080")
 	maxBinaryMB := envInt("MAX_BINARY_MB", 5)
 	maxRecordMB := envInt("MAX_RECORD_MB", 10)
+	minCellSize := envInt("MIN_CELL_SIZE", 5)
 	secret := env("RESEARCH_ID_SECRET", "dev-only-secret-change-me")
 	if secret == "dev-only-secret-change-me" {
 		log.Println("warning: RESEARCH_ID_SECRET is not set, using the development default")
@@ -57,7 +58,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           api.NewServer(db, summary, secret),
+		Handler:           api.NewServer(db, summary, api.Options{ResearchIDSecret: secret, MinCellSize: minCellSize}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {

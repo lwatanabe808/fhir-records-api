@@ -53,6 +53,7 @@ make test
 | `MAX_BINARY_MB` | `5` | Decoded attachments over this size are not stored |
 | `MAX_RECORD_MB` | `10` | Non-Binary lines over this size are not processed |
 | `RESEARCH_ID_SECRET` | dev default | Key for the de-identified research ids. Set it in any real environment. |
+| `MIN_CELL_SIZE` | `5` | Research groups smaller than this are shown as `<5` in the dataset profile |
 | `PLAUSIBLE_RANGES_FILE` | built in | JSON file of plausible ranges per lab test |
 
 ## Who uses this API
@@ -75,7 +76,7 @@ make test
 | `GET /patients/{id}/medications?status=` | Prescriptions |
 | `GET /patients/{id}/observations?code=&from=&to=` | Labs and vitals. `code` takes a LOINC code or a shortcut like `a1c`, `oxygen`, `blood-pressure`. Blood pressure comes back split into systolic and diastolic. |
 | `GET /patients/{id}/procedures` | Procedures |
-| `GET /patients/{id}/notes` | Notes with decoded text, or the reason text isn't available |
+| `GET /patients/{id}/notes?q=` | Notes with decoded text, or the reason text isn't available. `q` searches this patient's note text. |
 | `GET /patients/{id}/timeline` | Every record in one list, newest first |
 | `GET /patients/{id}/records?type=` | Original FHIR records of any type, including types without a clean table yet |
 
@@ -86,7 +87,8 @@ Every list item has a `warnings` field listing problems found in that record. Re
 ### Research partners (B2B)
 | Endpoint | What it returns |
 |---|---|
-| `GET /research/cohort?condition=&medication=&lab=&labMin=&labMax=&minAge=&maxAge=&gender=` | Count and de-identified details of matching patients |
+| `GET /research/cohort?condition=&medication=&procedure=&lab=&labMin=&labMax=&minAge=&maxAge=&gender=` | Count and de-identified details of matching patients. Exclusion criteria: `excludeCondition=`, `excludeMedication=`, `excludeProcedure=`. The count also reports possible duplicate patients. |
+| `GET /research/dataset-profile` | What partners ask before buying data: years of history per patient, completeness, coding standards, quality rates, and age and gender (small groups hidden) |
 | `GET /research/conditions` | How many patients have each condition |
 | `GET /research/labs/{code}` | Each patient's latest value for one test: count, min, median, max, per unit |
 
@@ -100,6 +102,7 @@ Every list item has a `warnings` field listing problems found in that record. Re
 | Endpoint | What it returns |
 |---|---|
 | `GET /fhir/{type}/{id}` | The original record, exactly as received |
+| `GET /fhir/{type}/{id}/history` | Every version of a record in file order, marked current, replaced or identical copy |
 | `GET /health` | Status and the load summary |
 
 Every error uses the same shape: `{"error": {"code": "INVALID_PARAMETER", "message": "limit: must be a whole number from 1 to 500"}}`. Bad parameters return 400, unknown patients and records return 404.
@@ -108,12 +111,31 @@ Every error uses the same shape: `{"error": {"code": "INVALID_PARAMETER", "messa
 
 `/research/cohort` answers the question research partners ask: "how many patients like this do you have, and what does their history look like?" For example, `condition=diabetes&lab=a1c&labMin=7` finds patients with type 2 diabetes whose latest A1c is 7 or higher.
 
+Partners describe the patients they need as **inclusion and exclusion criteria**, so both are supported: `condition=diabetes&excludeCondition=heart failure&procedure=colonoscopy`.
+
+**Honest counts.** The same person can arrive from two clinics under two patient ids. The loader never merges them, so the cohort response reports `possibleDuplicatePatients` and `countWithoutDuplicates`, and each affected patient lists the research ids it may duplicate. A count a partner can trust matters more than a big one.
+
 **Why this one:** it's how Novellia earns revenue. Clinical trials often struggle to find enough eligible patients, and Novellia's advantage is complete, cleaned history across many providers. This endpoint turns the cleaned data into that answer.
 
 **De-identified by design:**
 - No names, patient ids or birth dates. Each patient gets a research id, an HMAC of the patient id with a secret key, so it is stable but can't be reversed.
 - Ages over 89 are shown as `90+`, and dates are reduced to the year (from the HIPAA Safe Harbor rules).
 - Only trustworthy records count: no non-primary duplicates, corrections replace originals, no impossible or implausible values, and no refuted or entered-in-error diagnoses.
+
+### Dataset profile
+
+`/research/dataset-profile` answers the questions partners ask to judge whether data is usable, before any cohort search:
+
+| Question | Where it's answered |
+|---|---|
+| How long is each patient's history? | `history.yearsOfHistory`: median, min and max across patients |
+| How much data per patient? How current? | `history.datedRecordsPerPatient`, `history.yearsSinceLatestRecord` |
+| How complete are the key fields? | `completenessPercent`: birth date, gender, linked records, codes, units, dosages, readable notes |
+| Is it coded in standard terms? | `codingStandards`: percent LOINC, SNOMED, RxNorm, other, or none, per record type |
+| How clean is it? | `quality`: impossible, implausible, duplicate or replaced values, failed lines, possible duplicate patients |
+| Who is in it? | `population`: age bands and gender, with groups under `MIN_CELL_SIZE` shown as `<5` |
+
+It reports medians, not means, because a few extreme patients would pull a mean off.
 
 ## How loading works
 
@@ -198,7 +220,7 @@ Each case below is covered by a test in [internal/loader/loader_test.go](interna
 | 36 | Note links to a missing Binary | Pass 2 | Link kept, no text | `BINARY_BROKEN_REFERENCE` | warning |
 | 37 | Binary no note links to | Pass 2 | Kept, on no chart | `ORPHAN_BINARY` | info |
 | 38 | Same type and id, identical | Pass 1 | Copy skipped | `DUPLICATE_ID` | info |
-| 39 | Same type and id, changed | Pass 1 | Later version wins (unless `meta.lastUpdated` says otherwise) | `DUPLICATE_ID_CHANGED` | warning |
+| 39 | Same type and id, changed | Pass 1 | Later version wins (unless `meta.lastUpdated` says otherwise). Older versions stay in `raw_resources` and are listed by `/fhir/{type}/{id}/history` | `DUPLICATE_ID_CHANGED` | warning |
 | 40 | Different ids, same patient, test and exact time, different values | Pass 2 | Lowest id is primary, others hidden | `DUPLICATE_RECORD` | warning |
 | 41 | Same as 40, same values | Pass 2 | Lowest id is primary, others hidden | `DUPLICATE_RECORD` | info |
 | 42 | Amended or corrected reading | Pass 2 | Replaces the original (`replaced_by`) | `SUPERSEDED` | info |
@@ -262,12 +284,17 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 
 ## With more time
 
+- **Note search across all patients** for research. Notes are free text full of names, dates and places, so the text itself would need de-identifying first, which is a hard problem on its own. At that scale it would also need a full-text index (SQLite FTS5), and meaning-based search (so "felt sick" matches "nausea") would need an NLP or embedding model. Today, search is per patient, where a plain text match is fast and correct.
+- **Medication journeys:** each drug's start, stop, switch and dose changes in order, with the reason from the notes. That is what insurance claims miss and what partners ask about. The sample data has one prescription per drug, so it needs richer test data first.
+- **Loading new records as they arrive** instead of rebuilding the database on every start, to keep each patient's record current.
+- **Source system per record.** The data doesn't say which clinic each record came from, which matters when a patient's care spans several systems.
+
 - **Exact decimals.** Lab values are stored as floating point numbers, which is fine for filtering and display but drops FHIR's decimal precision (`7.80` vs `7.8`). The original text is kept in `raw_resources`; a clean column for it would be next.
 - **Code checks against LOINC and SNOMED** through a terminology server, so a code that doesn't exist gets flagged. Today only the presence of a code and its code system is checked.
 - **Fetch web address attachments** from the source system using the patient's portal connection, and store large files in a private, encrypted S3 bucket, served through short-lived pre-signed URLs.
 - **Implausible values from data** at scale: percentiles or median-based ranges per test, not means and standard deviations, which outliers distort.
 - **Code and label checks** using medical synonym data or an LLM that flags suspicious pairs for a person to review.
-- **Small-count suppression** in research results, so a very small cohort can't single out a person.
+- **Small-count suppression in cohort results** too (the dataset profile already hides small groups), so a very small cohort can't single out a person.
 - **FHIR Bundles** unpacked when a line contains one, and contained resources (`#id` attachments).
 - **A Postman collection** alongside the cURL script.
 

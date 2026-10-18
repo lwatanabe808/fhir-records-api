@@ -581,6 +581,13 @@ func (s *Server) patientNotes(w http.ResponseWriter, r *http.Request) {
 	includeHidden = includeHidden || single
 	q := `SELECT id, raw_resource_id, status, note_type, date, author FROM document_references WHERE patient_id = ?`
 	args := []any{id}
+	// ?q= searches the text of this patient's notes. One patient has a few hundred
+	// notes at most, so a plain text match is fast enough and easy to get right.
+	if text := strings.TrimSpace(r.URL.Query().Get("q")); text != "" {
+		q += ` AND id IN (SELECT a.document_id FROM document_attachments a JOIN binaries b ON b.id = a.binary_id
+			WHERE b.text LIKE ? ESCAPE '\')`
+		args = append(args, "%"+likeEscape(text)+"%")
+	}
 	if single {
 		q += ` AND id = ?`
 		args = append(args, r.PathValue("recordId"))
@@ -742,4 +749,9 @@ func (s *Server) patientRawRecords(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{"line": line, "resourceType": rt, "format": "raw", "resource": json.RawMessage(raw)})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// likeEscape makes % and _ in user text match literally in a LIKE pattern.
+func likeEscape(s string) string {
+	return strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(s)
 }

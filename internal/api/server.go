@@ -26,11 +26,23 @@ type Server struct {
 	summary  loader.Summary
 	idSecret []byte // key for research ids, so they can't be reversed into patient ids
 	now      func() time.Time
+
+	// minCellSize: research groups smaller than this are shown as "<N".
+	minCellSize int
+}
+
+// Options are the settings the API needs beyond the database.
+type Options struct {
+	ResearchIDSecret string
+	MinCellSize      int
 }
 
 // NewServer builds the HTTP handler.
-func NewServer(db *sql.DB, summary loader.Summary, researchIDSecret string) http.Handler {
-	s := &Server{db: db, summary: summary, idSecret: []byte(researchIDSecret), now: time.Now}
+func NewServer(db *sql.DB, summary loader.Summary, opts Options) http.Handler {
+	if opts.MinCellSize < 1 {
+		opts.MinCellSize = 1
+	}
+	s := &Server{db: db, summary: summary, idSecret: []byte(opts.ResearchIDSecret), now: time.Now, minCellSize: opts.MinCellSize}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", s.health)
@@ -55,6 +67,7 @@ func NewServer(db *sql.DB, summary loader.Summary, researchIDSecret string) http
 	// Research partners (B2B)
 	mux.HandleFunc("GET /research/cohort", s.cohort)
 	mux.HandleFunc("GET /research/conditions", s.conditionCounts)
+	mux.HandleFunc("GET /research/dataset-profile", s.datasetProfile)
 	mux.HandleFunc("GET /research/labs/{code}", s.labSummary)
 
 	// Data quality
@@ -63,6 +76,7 @@ func NewServer(db *sql.DB, summary loader.Summary, researchIDSecret string) http
 
 	// Original records
 	mux.HandleFunc("GET /fhir/{type}/{id}", s.rawRecord)
+	mux.HandleFunc("GET /fhir/{type}/{id}/history", s.rawRecordHistory)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "no endpoint at "+r.Method+" "+r.URL.Path)

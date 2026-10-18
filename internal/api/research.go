@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -95,7 +96,8 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 	if paramError(w, err) {
 		return
 	}
-	condition, medication, lab := q.Get("condition"), q.Get("medication"), labShortcut(q.Get("lab"))
+	condition, medication, procedure, lab := q.Get("condition"), q.Get("medication"), q.Get("procedure"), labShortcut(q.Get("lab"))
+	excludeCondition, excludeMedication, excludeProcedure := q.Get("excludeCondition"), q.Get("excludeMedication"), q.Get("excludeProcedure")
 	if (labMin != nil || labMax != nil) && lab == "" {
 		writeError(w, http.StatusBadRequest, "INVALID_PARAMETER", "labMin and labMax need lab, e.g. lab=a1c or lab=4548-4")
 		return
@@ -105,25 +107,31 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Patients matching the condition, medication and gender filters.
+	// 1. Patients matching the inclusion and exclusion criteria. Each criterion
+	// matches a code exactly, or a name containing the text.
 	where, args := []string{"1=1"}, []any{}
 	if gender != "" {
 		where = append(where, "p.gender = ?")
 		args = append(args, gender)
 	}
-	if condition != "" {
-		where = append(where, `EXISTS (SELECT 1 FROM conditions c WHERE c.patient_id = p.id AND `+usableCondition+`
-			AND (c.disease_code = ? OR lower(c.name) LIKE ? OR lower(c.label) LIKE ?))`)
-		like := "%" + strings.ToLower(condition) + "%"
-		args = append(args, condition, like, like)
+	add := func(value, matcher string, include bool) {
+		if value == "" {
+			return
+		}
+		op := "EXISTS"
+		if !include {
+			op = "NOT EXISTS"
+		}
+		where = append(where, op+" ("+matcher+")")
+		like := "%" + strings.ToLower(value) + "%"
+		args = append(args, value, like, like)
 	}
-	if medication != "" {
-		where = append(where, `EXISTS (SELECT 1 FROM medications m WHERE m.patient_id = p.id
-			AND coalesce(m.status, '') <> 'entered-in-error'
-			AND (m.drug_code = ? OR lower(m.name) LIKE ? OR lower(m.label) LIKE ?))`)
-		like := "%" + strings.ToLower(medication) + "%"
-		args = append(args, medication, like, like)
-	}
+	add(condition, conditionMatch, true)
+	add(medication, medicationMatch, true)
+	add(procedure, procedureMatch, true)
+	add(excludeCondition, conditionMatch, false)
+	add(excludeMedication, medicationMatch, false)
+	add(excludeProcedure, procedureMatch, false)
 	rows, err := s.db.Query(`SELECT p.id, p.gender, p.birth_date FROM patients p WHERE `+strings.Join(where, " AND ")+` ORDER BY p.id`, args...)
 	if err != nil {
 		serverError(w, err)
@@ -174,7 +182,32 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 		matched = append(matched, c)
 	}
 
-	// 4. De-identified details for this page.
+	// 4. The same person can come from two clinics under two patient ids. They
+	// are never merged, but the count says how many might be duplicates.
+	matchedIDs := make([]string, len(matched))
+	for i, c := range matched {
+		matchedIDs[i] = c.id
+	}
+	dupOf, err := s.possibleDuplicates(matchedIDs)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	extra := 0 // patients beyond the first in each possible-duplicate group
+	seenGroup := map[string]bool{}
+	for _, id := range matchedIDs {
+		if others := dupOf[id]; len(others) > 0 {
+			keys := append([]string{id}, others...)
+			slices.Sort(keys)
+			group := strings.Join(keys, ",")
+			if seenGroup[group] {
+				extra++
+			}
+			seenGroup[group] = true
+		}
+	}
+
+	// 5. De-identified details for this page.
 	page := []map[string]any{}
 	for i := offset; i < len(matched) && i < offset+limit; i++ {
 		c := matched[i]
@@ -194,18 +227,73 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 			l := labs[c.id]
 			p["lab"] = map[string]any{"test": l.name, "code": lab, "value": l.value, "unit": l.unit, "year": yearOnly(l.date)}
 		}
+		if others := dupOf[c.id]; len(others) > 0 {
+			ids := make([]string, len(others))
+			for j, o := range others {
+				ids[j] = s.researchID(o)
+			}
+			p["possibleDuplicateOf"] = ids
+		}
 		page = append(page, p)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"criteria": map[string]any{"condition": nullIfEmpty(condition), "medication": nullIfEmpty(medication),
-			"lab": nullIfEmpty(lab), "labMin": labMin, "labMax": labMax, "minAge": minAge, "maxAge": maxAge, "gender": nullIfEmpty(gender)},
-		"count":    len(matched),
-		"limit":    limit,
-		"offset":   offset,
-		"patients": page,
-		"note":     "De-identified: no names, ids or birth dates; ages over 89 shown as 90+; dates reduced to the year. Only usable records count.",
+			"procedure": nullIfEmpty(procedure), "lab": nullIfEmpty(lab), "labMin": labMin, "labMax": labMax,
+			"minAge": minAge, "maxAge": maxAge, "gender": nullIfEmpty(gender),
+			"excludeCondition": nullIfEmpty(excludeCondition), "excludeMedication": nullIfEmpty(excludeMedication),
+			"excludeProcedure": nullIfEmpty(excludeProcedure)},
+		"count":                     len(matched),
+		"possibleDuplicatePatients": extra,
+		"countWithoutDuplicates":    len(matched) - extra,
+		"limit":                     limit,
+		"offset":                    offset,
+		"patients":                  page,
+		"note":                      "De-identified: no names, ids or birth dates; ages over 89 shown as 90+; dates reduced to the year. Only usable records count.",
 	})
+}
+
+// Matchers for inclusion and exclusion criteria. Each takes the value three
+// times: an exact code, then a name and a label containing the text.
+const (
+	conditionMatch = `SELECT 1 FROM conditions c WHERE c.patient_id = p.id AND ` + usableCondition + `
+		AND (c.disease_code = ? OR lower(c.name) LIKE ? OR lower(c.label) LIKE ?)`
+	medicationMatch = `SELECT 1 FROM medications m WHERE m.patient_id = p.id
+		AND coalesce(m.status, '') <> 'entered-in-error'
+		AND (m.drug_code = ? OR lower(m.name) LIKE ? OR lower(m.label) LIKE ?)`
+	procedureMatch = `SELECT 1 FROM procedures pr WHERE pr.patient_id = p.id
+		AND coalesce(pr.status, '') NOT IN ('entered-in-error', 'not-done')
+		AND (pr.procedure_code = ? OR lower(pr.name) LIKE ? OR lower(pr.label) LIKE ?)`
+)
+
+// possibleDuplicates returns, for each patient id, the other ids in the list
+// with the same name and birth date (the POSSIBLE_DUPLICATE_PATIENT rule).
+func (s *Server) possibleDuplicates(ids []string) (map[string][]string, error) {
+	out := map[string][]string{}
+	if len(ids) < 2 {
+		return out, nil
+	}
+	in := map[string]bool{}
+	for _, id := range ids {
+		in[id] = true
+	}
+	rows, err := s.db.Query(`SELECT a.id, b.id FROM patients a JOIN patients b
+		ON lower(a.full_name) = lower(b.full_name) AND a.birth_date = b.birth_date AND a.id <> b.id
+		WHERE a.full_name IS NOT NULL AND a.birth_date IS NOT NULL ORDER BY a.id, b.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a, b string
+		if err := rows.Scan(&a, &b); err != nil {
+			return nil, err
+		}
+		if in[a] && in[b] {
+			out[a] = append(out[a], b)
+		}
+	}
+	return out, rows.Err()
 }
 
 func (s *Server) latestLabs(code string) (map[string]latestLab, error) {

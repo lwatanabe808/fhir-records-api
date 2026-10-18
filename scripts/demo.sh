@@ -27,12 +27,16 @@ show "Tracy's oxygen: the amended 96% replaces the original 94%" "/patients/trac
 show "One record by id, even a hidden one (the 7.9 duplicate)" "/patients/noah-wyle/observations/obs-nw-dup-001"
 show "Procedures" "/patients/noah-wyle/procedures"
 show "Notes with decoded text" "/patients/noah-wyle/notes"
+show "Search this patient's notes" "/patients/noah-wyle/notes?q=shift"
 show "Timeline, newest first" "/patients/noah-wyle/timeline"
 show "Raw records of any type, including non-standard ones" "/patients/noah-wyle/records"
 
 # Research partners (B2B)
 show "Cohort: diabetes with latest A1c of 7 or more (de-identified)" "/research/cohort?condition=diabetes&lab=a1c&labMin=7"
 show "Cohort: women aged 30 to 45" "/research/cohort?gender=female&minAge=30&maxAge=45"
+show "Cohort with exclusion: diabetes, but not high cholesterol" "/research/cohort?condition=diabetes&excludeCondition=hypercholesterolemia"
+show "Cohort by procedure" "/research/cohort?procedure=colonoscopy"
+show "Dataset profile: history, completeness, coding, quality, population" "/research/dataset-profile"
 show "How many patients have each condition" "/research/conditions"
 show "Latest A1c across patients: median and range" "/research/labs/a1c"
 
@@ -43,6 +47,7 @@ show "Only warnings about patient links" "/data-quality/issues?type=UNKNOWN_PATI
 
 # Original FHIR record
 show "Original record, untouched" "/fhir/Observation/obs-nw-dup-001"
+show "Every version of a record" "/fhir/Observation/obs-nw-dup-001/history"
 
 # Errors all share one shape
 show "Bad parameter (400)" "/patients?limit=abc"
