@@ -95,6 +95,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false) // show "<5" as written, not as "\u003c5"
 	_ = enc.Encode(v)
 }
 

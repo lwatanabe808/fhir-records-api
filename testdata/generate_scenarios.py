@@ -174,6 +174,14 @@ write("09-two-clinics.jsonl", [
     {**obs("a-ob-3", "clinic-a-1", A1C, "2025-05-05T08:00:00Z", 6.6, "%"), "meta": {"lastUpdated": "2025-05-05T12:00:00Z"}},  # older version: earlier one kept
     obs("a-ob-4", "clinic-a-1", A1C, "2025-06-06T08:00:00Z", 6.5, "%"),
     obs("a-ob-5", "clinic-a-1", A1C, "2025-06-06T08:00:00Z", 6.7, "%", status="corrected"),   # correction replaces a-ob-4
+    # Both clinics report the same diagnosis and an A1c: research counts must count Rosa once.
+    {"resourceType": "Condition", "id": "a-co-1", "clinicalStatus": {"coding": [{"code": "active"}]},
+     "verificationStatus": {"coding": [{"code": "confirmed"}]}, "code": DIABETES,
+     "subject": {"reference": "Patient/clinic-a-1"}, "onsetDateTime": "2010-01-01"},
+    {"resourceType": "Condition", "id": "b-co-1", "clinicalStatus": {"coding": [{"code": "active"}]},
+     "verificationStatus": {"coding": [{"code": "confirmed"}]}, "code": DIABETES,
+     "subject": {"reference": "Patient/clinic-b-77"}, "onsetDateTime": "2010-01-01"},
+    obs("b-ob-1", "clinic-b-77", A1C, "2025-07-07T08:00:00Z", 6.9, "%"),
 ])
 
 # 10. Attachments: PDF, HTML, inline data, a Binary shared by two notes,

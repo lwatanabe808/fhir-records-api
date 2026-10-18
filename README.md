@@ -53,7 +53,7 @@ make test
 | `MAX_BINARY_MB` | `5` | Decoded attachments over this size are not stored |
 | `MAX_RECORD_MB` | `10` | Non-Binary lines over this size are not processed |
 | `RESEARCH_ID_SECRET` | dev default | Key for the de-identified research ids. Set it in any real environment. |
-| `MIN_CELL_SIZE` | `5` | Research groups smaller than this are shown as `<5` in the dataset profile |
+| `MIN_CELL_SIZE` | `5` | Research counts below this show as `<5` (condition counts, lab summaries, dataset profile). The sample has only 16 patients, so most groups are hidden; use `MIN_CELL_SIZE=1` to see every number in a demo. |
 | `PLAUSIBLE_RANGES_FILE` | built in | JSON file of plausible ranges per lab test |
 
 ## Who uses this API
@@ -89,8 +89,8 @@ Every list item has a `warnings` field listing problems found in that record. Re
 |---|---|
 | `GET /research/cohort?condition=&medication=&procedure=&lab=&labMin=&labMax=&minAge=&maxAge=&gender=` | Count and de-identified details of matching patients. Exclusion criteria: `excludeCondition=`, `excludeMedication=`, `excludeProcedure=`. The count also reports possible duplicate patients. |
 | `GET /research/dataset-profile` | What partners ask before buying data: years of history per patient, completeness, coding standards, quality rates, and age and gender (small groups hidden) |
-| `GET /research/conditions` | How many patients have each condition |
-| `GET /research/labs/{code}` | Each patient's latest value for one test: count, min, median, max, per unit |
+| `GET /research/conditions` | How many patients have each condition. Possible duplicate patients are counted once, and counts under `MIN_CELL_SIZE` show as `<5`. |
+| `GET /research/labs/{code}` | Each patient's latest value for one test: count, min, median, max, per unit. A possible duplicate patient contributes one value, and statistics for groups under `MIN_CELL_SIZE` are hidden. |
 
 ### Data quality
 | Endpoint | What it returns |
@@ -113,7 +113,7 @@ Every error uses the same shape: `{"error": {"code": "INVALID_PARAMETER", "messa
 
 Partners describe the patients they need as **inclusion and exclusion criteria**, so both are supported: `condition=diabetes&excludeCondition=heart failure&procedure=colonoscopy`.
 
-**Honest counts.** The same person can arrive from two clinics under two patient ids. The loader never merges them, so the cohort response reports `possibleDuplicatePatients` and `countWithoutDuplicates`, and each affected patient lists the research ids it may duplicate. A count a partner can trust matters more than a big one.
+**Honest counts.** The same person can arrive from two clinics under two patient ids. The loader never merges them, so every research count accounts for it: the cohort response reports `possibleDuplicatePatients` and `countWithoutDuplicates` (each affected patient lists the research ids it may duplicate), condition counts count each possible duplicate once, and a lab summary takes one value per person. A count a partner can trust matters more than a big one.
 
 **Why this one:** it's how Novellia earns revenue. Clinical trials often struggle to find enough eligible patients, and Novellia's advantage is complete, cleaned history across many providers. This endpoint turns the cleaned data into that answer.
 
@@ -294,7 +294,7 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 - **Fetch web address attachments** from the source system using the patient's portal connection, and store large files in a private, encrypted S3 bucket, served through short-lived pre-signed URLs.
 - **Implausible values from data** at scale: percentiles or median-based ranges per test, not means and standard deviations, which outliers distort.
 - **Code and label checks** using medical synonym data or an LLM that flags suspicious pairs for a person to review.
-- **Small-count suppression in cohort results** too (the dataset profile already hides small groups), so a very small cohort can't single out a person.
+- **Small-count suppression in cohort results** too (condition counts, lab summaries and the dataset profile already hide small groups), so a very small cohort can't single out a person.
 - **FHIR Bundles** unpacked when a line contains one, and contained resources (`#id` attachments).
 - **A Postman collection** alongside the cURL script.
 

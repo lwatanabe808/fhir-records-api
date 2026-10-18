@@ -5,8 +5,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"net/http"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -188,23 +188,10 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 	for i, c := range matched {
 		matchedIDs[i] = c.id
 	}
-	dupOf, err := s.possibleDuplicates(matchedIDs)
+	dupOf, extra, err := s.duplicateGroups(matchedIDs)
 	if err != nil {
 		serverError(w, err)
 		return
-	}
-	extra := 0 // patients beyond the first in each possible-duplicate group
-	seenGroup := map[string]bool{}
-	for _, id := range matchedIDs {
-		if others := dupOf[id]; len(others) > 0 {
-			keys := append([]string{id}, others...)
-			slices.Sort(keys)
-			group := strings.Join(keys, ",")
-			if seenGroup[group] {
-				extra++
-			}
-			seenGroup[group] = true
-		}
 	}
 
 	// 5. De-identified details for this page.
@@ -265,6 +252,32 @@ const (
 		AND coalesce(pr.status, '') NOT IN ('entered-in-error', 'not-done')
 		AND (pr.procedure_code = ? OR lower(pr.name) LIKE ? OR lower(pr.label) LIKE ?)`
 )
+
+// duplicateGroups finds possible duplicate patients within a list of ids.
+// It returns, for each id, the other ids in the list that may be the same
+// person, and how many ids are extra (beyond the first in each group), so
+// len(ids) - extra is the count without possible duplicates.
+func (s *Server) duplicateGroups(ids []string) (dupOf map[string][]string, extra int, err error) {
+	dupOf, err = s.possibleDuplicates(ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, id := range ids {
+		if isExtraDuplicate(id, dupOf) {
+			extra++
+		}
+	}
+	return dupOf, extra, nil
+}
+
+// cell hides a count below the minimum cell size, so a small group can't
+// single someone out.
+func (s *Server) cell(n int) any {
+	if n > 0 && n < s.minCellSize {
+		return fmt.Sprintf("<%d", s.minCellSize)
+	}
+	return n
+}
 
 // possibleDuplicates returns, for each patient id, the other ids in the list
 // with the same name and birth date (the POSSIBLE_DUPLICATE_PATIENT rule).
@@ -357,35 +370,83 @@ func (s *Server) cohortMedications(patientID string) ([]map[string]any, error) {
 
 // ---------- GET /research/conditions ----------
 
-// How many patients have each condition. Useful for the first question
-// partners ask: "how many patients like this do you have?"
+// How many patients have each condition. This is usually the first question
+// partners ask ("how many patients like this do you have?"), so the count is
+// honest: possible duplicate patients (the same person from two clinics) are
+// counted once, and small counts are hidden.
 func (s *Server) conditionCounts(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(`SELECT c.code_system, c.disease_code, max(coalesce(c.name, c.label)), COUNT(DISTINCT c.patient_id) AS n
+	rows, err := s.db.Query(`SELECT DISTINCT c.code_system, c.disease_code, coalesce(c.name, c.label), c.patient_id
 		FROM conditions c
 		WHERE c.patient_id IS NOT NULL AND c.disease_code IS NOT NULL AND ` + usableCondition + `
-		GROUP BY c.code_system, c.disease_code ORDER BY n DESC, 3`)
+		ORDER BY c.code_system, c.disease_code, c.patient_id`)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	defer rows.Close()
-	out := []map[string]any{}
+	type group struct {
+		system, code, name sql.NullString
+		patients           []string
+	}
+	var groups []*group
+	byKey := map[string]*group{}
+	seen := map[string]bool{}
 	for rows.Next() {
 		var system, code, name sql.NullString
-		var n int
-		if err := rows.Scan(&system, &code, &name, &n); err != nil {
+		var pid string
+		if err := rows.Scan(&system, &code, &name, &pid); err != nil {
+			rows.Close()
 			serverError(w, err)
 			return
 		}
-		out = append(out, map[string]any{"condition": nullStr(name), "codeSystem": nullStr(system), "diseaseCode": nullStr(code), "patients": n})
+		key := system.String + "|" + code.String
+		g := byKey[key]
+		if g == nil {
+			g = &group{system: system, code: code, name: name}
+			byKey[key] = g
+			groups = append(groups, g)
+		}
+		if !seen[key+"|"+pid] {
+			seen[key+"|"+pid] = true
+			g.patients = append(g.patients, pid)
+		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	rows.Close()
+
+	type row struct {
+		item   map[string]any
+		unique int
+	}
+	var out []row
+	for _, g := range groups {
+		_, extra, err := s.duplicateGroups(g.patients)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		unique := len(g.patients) - extra
+		out = append(out, row{unique: unique, item: map[string]any{
+			"condition": nullStr(g.name), "codeSystem": nullStr(g.system), "diseaseCode": nullStr(g.code),
+			"patients": s.cell(unique), "patientRecords": s.cell(len(g.patients)), "possibleDuplicatePatients": extra,
+		}})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].unique > out[j].unique })
+	items := make([]map[string]any, len(out))
+	for i, r := range out {
+		items[i] = r.item
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"conditions":  items,
+		"minCellSize": s.minCellSize,
+		"note":        "patients counts possible duplicate patients (same name and birth date) once; patientRecords counts every patient id. Counts under minCellSize are hidden.",
+	})
 }
 
 // ---------- GET /research/labs/{code} ----------
 
 // Summary of each patient's latest value for one lab test. It reports the
 // median and range, not the mean: a few outliers would pull a mean off.
+// A possible duplicate patient contributes one value, not two, and groups
+// smaller than the minimum cell size show only that they exist.
 func (s *Server) labSummary(w http.ResponseWriter, r *http.Request) {
 	code := labShortcut(r.PathValue("code"))
 	labs, err := s.latestLabs(code)
@@ -393,20 +454,57 @@ func (s *Server) labSummary(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
+	ids := make([]string, 0, len(labs))
+	for id := range labs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	dupOf, extra, err := s.duplicateGroups(ids)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
 	byUnit := map[string][]float64{}
 	name := ""
-	for _, l := range labs {
+	for _, id := range ids {
+		if isExtraDuplicate(id, dupOf) {
+			continue // keep one value per possible duplicate group
+		}
+		l := labs[id]
 		byUnit[l.unit] = append(byUnit[l.unit], l.value)
 		name = l.name
 	}
-	units := []map[string]any{}
+	type unitRow struct {
+		n    int
+		item map[string]any
+	}
+	var rowsOut []unitRow
 	for unit, values := range byUnit { // values in different units are never mixed
 		sort.Float64s(values)
-		units = append(units, map[string]any{"unit": unit, "patients": len(values), "min": values[0],
-			"median": median(values), "max": values[len(values)-1]})
+		item := map[string]any{"unit": unit, "patients": s.cell(len(values))}
+		if len(values) >= s.minCellSize {
+			item["min"], item["median"], item["max"] = values[0], median(values), values[len(values)-1]
+		}
+		rowsOut = append(rowsOut, unitRow{n: len(values), item: item})
 	}
-	sort.Slice(units, func(i, j int) bool { return units[i]["patients"].(int) > units[j]["patients"].(int) })
-	writeJSON(w, http.StatusOK, map[string]any{"code": code, "test": nullIfEmpty(name), "patients": len(labs), "byUnit": units})
+	sort.Slice(rowsOut, func(i, j int) bool { return rowsOut[i].n > rowsOut[j].n })
+	units := make([]map[string]any, len(rowsOut))
+	for i, u := range rowsOut {
+		units[i] = u.item
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"code": code, "test": nullIfEmpty(name),
+		"patients": s.cell(len(ids) - extra), "possibleDuplicatePatients": extra, "byUnit": units, "minCellSize": s.minCellSize})
+}
+
+// isExtraDuplicate reports whether id is not the first (alphabetically) in its
+// possible duplicate group.
+func isExtraDuplicate(id string, dupOf map[string][]string) bool {
+	for _, other := range dupOf[id] {
+		if other < id {
+			return true
+		}
+	}
+	return false
 }
 
 func median(sorted []float64) float64 {

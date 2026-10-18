@@ -16,6 +16,11 @@ import (
 
 func newTestServer(t *testing.T, file string) http.Handler {
 	t.Helper()
+	return newTestServerWithCell(t, file, 5)
+}
+
+func newTestServerWithCell(t *testing.T, file string, minCellSize int) http.Handler {
+	t.Helper()
 	db, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +35,7 @@ func newTestServer(t *testing.T, file string) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewServer(db, sum, Options{ResearchIDSecret: "test-secret", MinCellSize: 5})
+	return NewServer(db, sum, Options{ResearchIDSecret: "test-secret", MinCellSize: minCellSize})
 }
 
 func get(t *testing.T, h http.Handler, path string, wantStatus int) string {
@@ -299,5 +304,42 @@ func TestDatasetProfile(t *testing.T) {
 	}
 	if strings.Contains(body, "noah") || strings.Contains(body, "Wyle") {
 		t.Error("profile must not contain patient details")
+	}
+}
+
+func TestCountsDoNotDoubleCountDuplicatePatients(t *testing.T) {
+	// Rosa Parks appears as clinic-a-1 and clinic-b-77, both with diabetes and an A1c.
+	h := newTestServerWithCell(t, "../../testdata/scenarios/09-two-clinics.jsonl", 1)
+	body := get(t, h, "/research/conditions", http.StatusOK)
+	var conds struct {
+		Conditions []map[string]any `json:"conditions"`
+	}
+	if err := json.Unmarshal([]byte(body), &conds); err != nil {
+		t.Fatal(err)
+	}
+	if len(conds.Conditions) != 1 || conds.Conditions[0]["patients"] != 1.0 ||
+		conds.Conditions[0]["patientRecords"] != 2.0 || conds.Conditions[0]["possibleDuplicatePatients"] != 1.0 {
+		t.Errorf("diabetes should count Rosa once: %s", body)
+	}
+	body = get(t, h, "/research/labs/a1c", http.StatusOK)
+	var labs struct {
+		Patients any `json:"patients"`
+		Dups     int `json:"possibleDuplicatePatients"`
+	}
+	json.Unmarshal([]byte(body), &labs)
+	if labs.Patients != 1.0 || labs.Dups != 1 {
+		t.Errorf("A1c summary should count Rosa once: %s", body)
+	}
+}
+
+func TestCountsHideSmallGroups(t *testing.T) {
+	h := newTestServer(t, "../../testdata/scenarios/09-two-clinics.jsonl") // minimum group size 5
+	body := get(t, h, "/research/conditions", http.StatusOK)
+	if !strings.Contains(body, `"patients": "<5"`) {
+		t.Errorf("a condition with 1 patient should show <5: %s", body)
+	}
+	body = get(t, h, "/research/labs/a1c", http.StatusOK)
+	if strings.Contains(body, `"median"`) {
+		t.Errorf("statistics for fewer than 5 patients should be hidden: %s", body)
 	}
 }
