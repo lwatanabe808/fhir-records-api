@@ -113,7 +113,7 @@ Every error uses the same shape: `{"error": {"code": "INVALID_PARAMETER", "messa
 
 Partners describe the patients they need as **inclusion and exclusion criteria**, so both are supported: `condition=diabetes&excludeCondition=heart failure&procedure=colonoscopy`.
 
-**Honest counts.** The same person can arrive from two clinics under two patient ids. The loader never merges them, so every research count accounts for it: the cohort response reports `possibleDuplicatePatients` and `countWithoutDuplicates` (each affected patient lists the research ids it may duplicate), condition counts count each possible duplicate once, and a lab summary takes one value per person. A count a partner can trust matters more than a big one.
+**Honest counts.** The same person can arrive from two clinics under two patient ids. The loader never merges them, so every research count accounts for it: every research count gives three numbers: `countWithoutDuplicates` (the conservative number, possible duplicates counted once), `countIncludingPossibleDuplicates` (every patient id), and `possibleDuplicatePatients` (how many were combined). Condition counts, lab summaries and the dataset profile use the same names with `patients` in place of `count`. In cohort results, each affected patient lists the research ids it may duplicate, and a lab summary takes one value per person. A count a partner can trust matters more than a big one.
 
 **Why this one:** it's how Novellia earns revenue. Clinical trials often struggle to find enough eligible patients, and Novellia's advantage is complete, cleaned history across many providers. This endpoint turns the cleaned data into that answer.
 

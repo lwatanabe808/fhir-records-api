@@ -100,7 +100,7 @@ func TestCohortIsDeidentified(t *testing.T) {
 	h := newTestServer(t, "../../data/fhir-resources.jsonl")
 	body := get(t, h, "/research/cohort?condition=diabetes&lab=a1c&labMin=7", http.StatusOK)
 	var resp struct {
-		Count    int              `json:"count"`
+		Count    int              `json:"countWithoutDuplicates"`
 		Patients []map[string]any `json:"patients"`
 	}
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
@@ -123,7 +123,7 @@ func TestCohortSkipsRefutedDiagnosis(t *testing.T) {
 	h := newTestServer(t, "../../testdata/messy.jsonl")
 	body := get(t, h, "/research/cohort?condition=44054006", http.StatusOK)
 	var resp struct {
-		Count int `json:"count"`
+		Count int `json:"countWithoutDuplicates"`
 	}
 	json.Unmarshal([]byte(body), &resp)
 	if resp.Count != 1 { // p1 has diabetes; p2's diagnosis was refuted
@@ -210,7 +210,7 @@ func TestCohortExclusionAndProcedure(t *testing.T) {
 	h := newTestServer(t, "../../data/fhir-resources.jsonl")
 	count := func(path string) int {
 		var resp struct {
-			Count int `json:"count"`
+			Count int `json:"countWithoutDuplicates"`
 		}
 		json.Unmarshal([]byte(get(t, h, path, http.StatusOK)), &resp)
 		return resp.Count
@@ -235,16 +235,16 @@ func TestCohortCountsPossibleDuplicates(t *testing.T) {
 	h := newTestServer(t, "../../testdata/scenarios/09-two-clinics.jsonl")
 	body := get(t, h, "/research/cohort", http.StatusOK)
 	var resp struct {
-		Count    int              `json:"count"`
+		Count    int              `json:"countWithoutDuplicates"`
 		Dups     int              `json:"possibleDuplicatePatients"`
-		Unique   int              `json:"countWithoutDuplicates"`
+		All      int              `json:"countIncludingPossibleDuplicates"`
 		Patients []map[string]any `json:"patients"`
 	}
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.Count != 2 || resp.Dups != 1 || resp.Unique != 1 {
-		t.Errorf("want count 2, 1 possible duplicate, 1 without duplicates: %s", body)
+	if resp.Count != 1 || resp.Dups != 1 || resp.All != 2 {
+		t.Errorf("want count 1 (Rosa once), 2 including possible duplicates: %s", body)
 	}
 	if _, ok := resp.Patients[0]["possibleDuplicateOf"]; !ok {
 		t.Errorf("expected possibleDuplicateOf on each patient: %s", body)
@@ -275,7 +275,7 @@ func TestDatasetProfile(t *testing.T) {
 	h := newTestServer(t, "../../data/fhir-resources.jsonl")
 	body := get(t, h, "/research/dataset-profile", http.StatusOK)
 	var resp struct {
-		Patients     int                       `json:"patients"`
+		Patients     int                       `json:"patientsWithoutDuplicates"`
 		Completeness map[string]float64        `json:"completenessPercent"`
 		Coding       map[string]map[string]any `json:"codingStandards"`
 		Population   map[string]map[string]any `json:"population"`
@@ -317,13 +317,13 @@ func TestCountsDoNotDoubleCountDuplicatePatients(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &conds); err != nil {
 		t.Fatal(err)
 	}
-	if len(conds.Conditions) != 1 || conds.Conditions[0]["patients"] != 1.0 ||
-		conds.Conditions[0]["patientRecords"] != 2.0 || conds.Conditions[0]["possibleDuplicatePatients"] != 1.0 {
+	if len(conds.Conditions) != 1 || conds.Conditions[0]["patientsWithoutDuplicates"] != 1.0 ||
+		conds.Conditions[0]["patientsIncludingPossibleDuplicates"] != 2.0 || conds.Conditions[0]["possibleDuplicatePatients"] != 1.0 {
 		t.Errorf("diabetes should count Rosa once: %s", body)
 	}
 	body = get(t, h, "/research/labs/a1c", http.StatusOK)
 	var labs struct {
-		Patients any `json:"patients"`
+		Patients any `json:"patientsWithoutDuplicates"`
 		Dups     int `json:"possibleDuplicatePatients"`
 	}
 	json.Unmarshal([]byte(body), &labs)
@@ -335,11 +335,24 @@ func TestCountsDoNotDoubleCountDuplicatePatients(t *testing.T) {
 func TestCountsHideSmallGroups(t *testing.T) {
 	h := newTestServer(t, "../../testdata/scenarios/09-two-clinics.jsonl") // minimum group size 5
 	body := get(t, h, "/research/conditions", http.StatusOK)
-	if !strings.Contains(body, `"patients": "<5"`) {
+	if !strings.Contains(body, `"patientsWithoutDuplicates": "<5"`) {
 		t.Errorf("a condition with 1 patient should show <5: %s", body)
 	}
 	body = get(t, h, "/research/labs/a1c", http.StatusOK)
 	if strings.Contains(body, `"median"`) {
 		t.Errorf("statistics for fewer than 5 patients should be hidden: %s", body)
+	}
+}
+
+func TestDatasetProfileCountsPeopleOnce(t *testing.T) {
+	h := newTestServer(t, "../../testdata/scenarios/09-two-clinics.jsonl")
+	body := get(t, h, "/research/dataset-profile", http.StatusOK)
+	var resp struct {
+		Patients int `json:"patientsWithoutDuplicates"`
+		All      int `json:"patientsIncludingPossibleDuplicates"`
+	}
+	json.Unmarshal([]byte(body), &resp)
+	if resp.Patients != 1 || resp.All != 2 {
+		t.Errorf("want 1 patient, 2 including possible duplicates: %s", body)
 	}
 }

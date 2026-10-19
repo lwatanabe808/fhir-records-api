@@ -230,13 +230,14 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 			"minAge": minAge, "maxAge": maxAge, "gender": nullIfEmpty(gender),
 			"excludeCondition": nullIfEmpty(excludeCondition), "excludeMedication": nullIfEmpty(excludeMedication),
 			"excludeProcedure": nullIfEmpty(excludeProcedure)},
-		"count":                     len(matched),
-		"possibleDuplicatePatients": extra,
-		"countWithoutDuplicates":    len(matched) - extra,
-		"limit":                     limit,
-		"offset":                    offset,
-		"patients":                  page,
-		"note":                      "De-identified: no names, ids or birth dates; ages over 89 shown as 90+; dates reduced to the year. Only usable records count.",
+		// The conservative number: possible duplicate patients count once.
+		"countWithoutDuplicates":           len(matched) - extra,
+		"countIncludingPossibleDuplicates": len(matched),
+		"possibleDuplicatePatients":        extra,
+		"limit":                            limit,
+		"offset":                           offset,
+		"patients":                         page,
+		"note":                             "De-identified: no names, ids or birth dates; ages over 89 shown as 90+; dates reduced to the year. Only usable records count.",
 	})
 }
 
@@ -426,7 +427,7 @@ func (s *Server) conditionCounts(w http.ResponseWriter, r *http.Request) {
 		unique := len(g.patients) - extra
 		out = append(out, row{unique: unique, item: map[string]any{
 			"condition": nullStr(g.name), "codeSystem": nullStr(g.system), "diseaseCode": nullStr(g.code),
-			"patients": s.cell(unique), "patientRecords": s.cell(len(g.patients)), "possibleDuplicatePatients": extra,
+			"patientsWithoutDuplicates": s.cell(unique), "patientsIncludingPossibleDuplicates": s.cell(len(g.patients)), "possibleDuplicatePatients": extra,
 		}})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].unique > out[j].unique })
@@ -437,7 +438,7 @@ func (s *Server) conditionCounts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"conditions":  items,
 		"minCellSize": s.minCellSize,
-		"note":        "patients counts possible duplicate patients (same name and birth date) once; patientRecords counts every patient id. Counts under minCellSize are hidden.",
+		"note":        "patientsWithoutDuplicates counts possible duplicate patients (same name and birth date) once; patientsIncludingPossibleDuplicates counts every patient id. Counts under minCellSize are hidden.",
 	})
 }
 
@@ -481,7 +482,7 @@ func (s *Server) labSummary(w http.ResponseWriter, r *http.Request) {
 	var rowsOut []unitRow
 	for unit, values := range byUnit { // values in different units are never mixed
 		sort.Float64s(values)
-		item := map[string]any{"unit": unit, "patients": s.cell(len(values))}
+		item := map[string]any{"unit": unit, "patientsWithoutDuplicates": s.cell(len(values))}
 		if len(values) >= s.minCellSize {
 			item["min"], item["median"], item["max"] = values[0], median(values), values[len(values)-1]
 		}
@@ -493,7 +494,8 @@ func (s *Server) labSummary(w http.ResponseWriter, r *http.Request) {
 		units[i] = u.item
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"code": code, "test": nullIfEmpty(name),
-		"patients": s.cell(len(ids) - extra), "possibleDuplicatePatients": extra, "byUnit": units, "minCellSize": s.minCellSize})
+		"patientsWithoutDuplicates": s.cell(len(ids) - extra), "patientsIncludingPossibleDuplicates": s.cell(len(ids)),
+		"possibleDuplicatePatients": extra, "byUnit": units, "minCellSize": s.minCellSize})
 }
 
 // isExtraDuplicate reports whether id is not the first (alphabetically) in its

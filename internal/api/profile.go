@@ -64,22 +64,28 @@ func (s *Server) datasetProfile(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	var patients int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM patients`).Scan(&patients); err != nil {
+	allIDs, err := s.patientIDs()
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	_, extra, err := s.duplicateGroups(allIDs)
+	if err != nil {
 		serverError(w, err)
 		return
 	}
 
 	quality["patientsPossiblyDuplicated"] = possibleDupPatients
 	writeJSON(w, http.StatusOK, map[string]any{
-		"patients":            patients,
-		"history":             history,
-		"completenessPercent": completeness,
-		"codingStandards":     coding,
-		"quality":             quality,
-		"population":          population,
-		"minCellSize":         s.minCellSize,
-		"note":                "Aggregates only. Population groups smaller than minCellSize are shown as \"<N\". Percentages are of all records loaded.",
+		"patientsWithoutDuplicates":           len(allIDs) - extra, // possible duplicates count once
+		"patientsIncludingPossibleDuplicates": len(allIDs),
+		"history":                             history,
+		"completenessPercent":                 completeness,
+		"codingStandards":                     coding,
+		"quality":                             quality,
+		"population":                          population,
+		"minCellSize":                         s.minCellSize,
+		"note":                                "Aggregates only. Population groups smaller than minCellSize are shown as \"<N\". Percentages are of all records loaded.",
 	})
 }
 
@@ -262,4 +268,22 @@ func (s *Server) suppress(counts map[string]int) map[string]any {
 		}
 	}
 	return out
+}
+
+// patientIDs lists every patient id.
+func (s *Server) patientIDs() ([]string, error) {
+	rows, err := s.db.Query(`SELECT id FROM patients ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
