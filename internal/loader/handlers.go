@@ -96,7 +96,7 @@ func insertPatient(rec *recordCtx) error {
 			return err
 		}
 	} else if found {
-		ssnHash = hashSSN(rec.l.cfg.IdentifierSecret, digits)
+		ssnHash = hashSSN(rec.l.cfg.SSNSecret, digits)
 	}
 
 	return exec(rec, `INSERT INTO patients (id, raw_resource_id, full_name, family_name, given_names, gender, birth_date,

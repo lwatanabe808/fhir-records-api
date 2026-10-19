@@ -52,8 +52,8 @@ make test
 | `DB_PATH` | `db/novellia.db` (`/app/db/novellia.db` in Docker) | SQLite file, rebuilt on every start. Use `:memory:` to skip the file. |
 | `MAX_BINARY_MB` | `5` | Decoded attachments over this size are not stored |
 | `MAX_RECORD_MB` | `10` | Non-Binary lines over this size are not processed |
-| `RESEARCH_ID_SECRET` | dev default | Key for the de-identified research ids. Set it in any real environment. |
-| `IDENTIFIER_SECRET` | dev default | Key used to hash Social Security numbers before they are stored. Set it in any real environment. |
+| `PATIENT_ID_SECRET` | dev default | Key for the de-identified research ids. Set it in any real environment. |
+| `SSN_SECRET` | dev default | Key used to hash Social Security numbers before they are stored. Set it in any real environment. |
 | `MIN_CELL_SIZE` | `5` | Research counts below this show as `<5` (condition counts, lab summaries, dataset profile). The sample has only 16 patients, so most groups are hidden; use `MIN_CELL_SIZE=1` to see every number in a demo. |
 | `PLAUSIBLE_RANGES_FILE` | built in | JSON file of plausible ranges per lab test |
 
@@ -277,7 +277,7 @@ Besides the sample file, [testdata/scenarios](testdata/scenarios) has input file
   | Same name and birth date only | Separate, `POSSIBLE_DUPLICATE_PATIENT` | Once (possible duplicate) |
 
   The chart only combines on strong evidence, because a wrong merge shows one person's health data to another. Research counts lean the other way, so a person is never counted twice. Every count shows `countWithoutDuplicates`, `countIncludingPossibleDuplicates` and `possibleDuplicatePatients`, and `/patients/{id}` lists `linkedPatientIds`.
-- **SSNs are never stored or returned.** The loader keeps only a keyed hash (HMAC with `IDENTIFIER_SECRET`) for matching. The original record is kept as received, so every endpoint that returns raw JSON replaces the SSN with `[redacted]`.
+- **SSNs are never stored or returned.** The loader keeps only a keyed hash (HMAC with `SSN_SECRET`) for matching. The original record is kept as received, so every endpoint that returns raw JSON replaces the SSN with `[redacted]`.
 - **Duplicates are flagged, never deleted.** The clean view shows one primary record with a warning, and the others are one parameter away.
 - **Medical meaning is not judged.** The API checks structure and consistency. Whether a label like "History of MI" fits an active status, or whether a code and its label describe the same thing, needs clinical judgment.
 - **Plausible ranges are placeholders.** They are deliberately wide limits meant to catch typos, not medical judgments, and they live in a config file so a clinician can correct them.

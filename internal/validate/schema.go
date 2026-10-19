@@ -17,6 +17,8 @@ import (
 
 // fhir.schema.json is the official FHIR R4 JSON schema from
 // https://hl7.org/fhir/R4/fhir.schema.json.zip
+
+// EMBEDS THE SCHEMA INTO schemaJSON as bytes
 //
 //go:embed fhir.schema.json
 var schemaJSON []byte
@@ -33,7 +35,7 @@ type Problem struct {
 // Schema validates records against the FHIR R4 schema, one resource type at a time.
 type Schema struct {
 	compiler *jsonschema.Compiler
-	types    map[string]bool
+	types    map[string]string // official type name → its rules, e.g. "Patient" → "#/definitions/Patient"
 
 	mu       sync.Mutex
 	compiled map[string]*jsonschema.Schema
@@ -41,17 +43,20 @@ type Schema struct {
 
 // NewSchema loads the embedded FHIR schema.
 func NewSchema() (*Schema, error) {
-	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schemaJSON))
+	schemaJSONBytesReader := bytes.NewReader(schemaJSON)
+	doc, err := jsonschema.UnmarshalJSON(schemaJSONBytesReader)
 	if err != nil {
 		return nil, fmt.Errorf("read FHIR schema: %w", err)
 	}
 	c := jsonschema.NewCompiler()
+	// The schema doc says it's written in draft 6
 	c.DefaultDraft(jsonschema.Draft6)
+	// add the unmarshaled schema to the compiler and name it file:///fhir.schema.json
 	if err := c.AddResource(schemaURL, doc); err != nil {
 		return nil, err
 	}
 
-	// The schema lists every official resource type in its discriminator mapping.
+	// In the json schema, discriminator.mapping contains the valid record types
 	var meta struct {
 		Discriminator struct {
 			Mapping map[string]string `json:"mapping"`
@@ -60,16 +65,13 @@ func NewSchema() (*Schema, error) {
 	if err := json.Unmarshal(schemaJSON, &meta); err != nil {
 		return nil, err
 	}
-	types := map[string]bool{}
-	for t := range meta.Discriminator.Mapping {
-		types[t] = true
-	}
-	return &Schema{compiler: c, types: types, compiled: map[string]*jsonschema.Schema{}}, nil
+	return &Schema{compiler: c, types: meta.Discriminator.Mapping, compiled: map[string]*jsonschema.Schema{}}, nil
 }
 
 // IsFHIRType reports whether the name is one of the official R4 resource types.
 func (s *Schema) IsFHIRType(resourceType string) bool {
-	return s.types[resourceType]
+	_, ok := s.types[resourceType]
+	return ok
 }
 
 // Validate checks one record against the schema for its own type only.

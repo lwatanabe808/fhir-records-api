@@ -22,10 +22,10 @@ import (
 
 // Server holds what the handlers need.
 type Server struct {
-	db       *sql.DB
-	summary  loader.Summary
-	idSecret []byte // key for research ids, so they can't be reversed into patient ids
-	now      func() time.Time
+	db              *sql.DB
+	summary         loader.Summary
+	patientIDSecret []byte // key for research ids, so they can't be reversed into patient ids
+	now             func() time.Time
 
 	// minCellSize: research groups smaller than this are shown as "<N".
 	minCellSize int
@@ -33,8 +33,8 @@ type Server struct {
 
 // Options are the settings the API needs beyond the database.
 type Options struct {
-	ResearchIDSecret string
-	MinCellSize      int
+	PatientIDSecret string
+	MinCellSize     int
 }
 
 // NewServer builds the HTTP handler.
@@ -42,7 +42,7 @@ func NewServer(db *sql.DB, summary loader.Summary, opts Options) http.Handler {
 	if opts.MinCellSize < 1 {
 		opts.MinCellSize = 1
 	}
-	s := &Server{db: db, summary: summary, idSecret: []byte(opts.ResearchIDSecret), now: time.Now, minCellSize: opts.MinCellSize}
+	s := &Server{db: db, summary: summary, patientIDSecret: []byte(opts.PatientIDSecret), now: time.Now, minCellSize: opts.MinCellSize}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", s.health)

@@ -33,7 +33,7 @@ const usableCondition = `coalesce(c.verification_status, '') NOT IN ('refuted', 
 // researchID turns a patient id into a stable id that can't be turned back.
 // HMAC with a secret key, so nobody can rebuild it by hashing known ids.
 func (s *Server) researchID(patientID string) string {
-	mac := hmac.New(sha256.New, s.idSecret)
+	mac := hmac.New(sha256.New, s.patientIDSecret)
 	mac.Write([]byte(patientID))
 	return "r-" + hex.EncodeToString(mac.Sum(nil))[:12]
 }

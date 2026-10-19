@@ -35,7 +35,7 @@ func newTestServerWithCell(t *testing.T, file string, minCellSize int) http.Hand
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewServer(db, sum, Options{ResearchIDSecret: "test-secret", MinCellSize: minCellSize})
+	return NewServer(db, sum, Options{PatientIDSecret: "test-secret", MinCellSize: minCellSize})
 }
 
 func get(t *testing.T, h http.Handler, path string, wantStatus int) string {

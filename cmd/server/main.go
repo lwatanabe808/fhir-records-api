@@ -22,16 +22,20 @@ func main() {
 	dataFile := env("DATA_FILE", "data/fhir-resources.jsonl")
 	dbPath := env("DB_PATH", "db/novellia.db")
 	port := env("PORT", "8080")
-	maxBinaryMB := envInt("MAX_BINARY_MB", 5)
-	maxRecordMB := envInt("MAX_RECORD_MB", 10)
-	minCellSize := envInt("MIN_CELL_SIZE", 5)
-	secret := env("RESEARCH_ID_SECRET", "dev-only-secret-change-me")
-	identifierSecret := env("IDENTIFIER_SECRET", "dev-only-identifier-secret-change-me")
-	if identifierSecret == "dev-only-identifier-secret-change-me" {
-		log.Println("warning: IDENTIFIER_SECRET is not set, using the development default")
+	maxBinaryMB := envInt("MAX_BINARY_MB", 5) // default 5
+	// if one line (record) is too large
+	maxRecordMB := envInt("MAX_RECORD_MB", 10) // default 10
+	// protects privacy in research results. Any count under 5 shows as "<5". If a partner sees “2 patients with this rare disease in this age group”
+	minCellSize := envInt("MIN_CELL_SIZE", 5) // default 5
+	// secret for hashing patient ids into the ids research partners see
+	patientIDSecret := env("PATIENT_ID_SECRET", "dev-only-patient-id-secret-change-me")
+	if patientIDSecret == "dev-only-patient-id-secret-change-me" {
+		log.Println("warning: PATIENT_ID_SECRET is not set, using the development default")
 	}
-	if secret == "dev-only-secret-change-me" {
-		log.Println("warning: RESEARCH_ID_SECRET is not set, using the development default")
+	// secret for hashing SSNs, used to match people across clinics
+	ssnSecret := env("SSN_SECRET", "dev-only-ssn-secret-change-me")
+	if ssnSecret == "dev-only-ssn-secret-change-me" {
+		log.Println("warning: SSN_SECRET is not set, using the development default")
 	}
 
 	schema, err := validate.NewSchema()
@@ -49,10 +53,10 @@ func main() {
 	defer db.Close()
 
 	summary, err := loader.LoadFile(context.Background(), db, dataFile, schema, loader.Config{
-		MaxBinaryBytes:   maxBinaryMB << 20,
-		MaxRecordBytes:   maxRecordMB << 20,
-		Ranges:           ranges,
-		IdentifierSecret: []byte(identifierSecret),
+		MaxBinaryBytes: maxBinaryMB << 20,
+		MaxRecordBytes: maxRecordMB << 20,
+		Ranges:         ranges,
+		SSNSecret:      []byte(ssnSecret),
 	})
 	if err != nil {
 		log.Fatalf("load data: %v", err)
@@ -63,7 +67,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           api.NewServer(db, summary, api.Options{ResearchIDSecret: secret, MinCellSize: minCellSize}),
+		Handler:           api.NewServer(db, summary, api.Options{PatientIDSecret: patientIDSecret, MinCellSize: minCellSize}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
