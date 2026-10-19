@@ -400,7 +400,7 @@ func nullIfEmpty(s string) any {
 
 func (s *Server) patientObservations(w http.ResponseWriter, r *http.Request) {
 	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, code_system, lab_test_code, name, label, status,
-		measured_at, value, value_text, unit, is_primary, replaced_by, is_impossible, is_implausible FROM observations`)
+		measured_at, is_primary, replaced_by, is_impossible, is_implausible FROM observations`)
 	if !ok {
 		return
 	}
@@ -435,17 +435,15 @@ func (s *Server) patientObservations(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var oid string
 		var raw int64
-		var system, code, name, label, st, at, valueText, unit, replacedBy sql.NullString
-		var value sql.NullFloat64
+		var system, code, name, label, st, at, replacedBy sql.NullString
 		var primary, impossible, implausible bool
-		if err := rows.Scan(&oid, &raw, &system, &code, &name, &label, &st, &at, &value, &valueText, &unit,
+		if err := rows.Scan(&oid, &raw, &system, &code, &name, &label, &st, &at,
 			&primary, &replacedBy, &impossible, &implausible); err != nil {
 			serverError(w, err)
 			return
 		}
 		item := map[string]any{"id": oid, "test": nullIfEmpty(nameOr(name, label, "")), "label": nullStr(label), "codeSystem": nullStr(system),
-			"code": nullStr(code), "date": nullStr(at), "value": nullFloat(value), "valueText": nullStr(valueText),
-			"unit": nullStr(unit), "status": nullStr(st)}
+			"code": nullStr(code), "date": nullStr(at), "status": nullStr(st)}
 		if list.includeHidden {
 			hidden := []string{}
 			if replacedBy.Valid {
@@ -468,38 +466,45 @@ func (s *Server) patientObservations(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 	}
 
-	// Components such as systolic and diastolic blood pressure.
 	for _, it := range items {
-		comps, err := s.components(it["id"].(string))
-		if err != nil {
+		if err := s.addValues(it); err != nil {
 			serverError(w, err)
 			return
-		}
-		if len(comps) > 0 {
-			it["components"] = comps
 		}
 	}
 	s.respondWithWarnings(w, items, raws, list.single)
 }
 
-func (s *Server) components(observationID string) ([]map[string]any, error) {
-	rows, err := s.db.Query(`SELECT lab_test_code, name, value, value_text, unit FROM observation_components
-		WHERE observation_id = ? ORDER BY rowid`, observationID)
+// addValues adds an observation's results to its JSON from observation_values:
+// value, valueText and unit for a single result, and "components" for a
+// multi-part result like blood pressure.
+func (s *Server) addValues(item map[string]any) error {
+	rows, err := s.db.Query(`SELECT is_component, lab_test_code, name, value, value_text, unit FROM observation_values
+		WHERE observation_id = ? ORDER BY rowid`, item["id"])
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
-	var out []map[string]any
+	item["value"], item["valueText"], item["unit"] = nil, nil, nil
+	var components []map[string]any
 	for rows.Next() {
+		var isComponent bool
 		var code, name, valueText, unit sql.NullString
 		var value sql.NullFloat64
-		if err := rows.Scan(&code, &name, &value, &valueText, &unit); err != nil {
-			return nil, err
+		if err := rows.Scan(&isComponent, &code, &name, &value, &valueText, &unit); err != nil {
+			return err
 		}
-		out = append(out, map[string]any{"test": nullStr(name), "code": nullStr(code), "value": nullFloat(value),
-			"valueText": nullStr(valueText), "unit": nullStr(unit)})
+		if isComponent {
+			components = append(components, map[string]any{"test": nullStr(name), "code": nullStr(code), "value": nullFloat(value),
+				"valueText": nullStr(valueText), "unit": nullStr(unit)})
+		} else {
+			item["value"], item["valueText"], item["unit"] = nullFloat(value), nullStr(valueText), nullStr(unit)
+		}
 	}
-	return out, rows.Err()
+	if len(components) > 0 {
+		item["components"] = components
+	}
+	return rows.Err()
 }
 
 // labShortcuts lets callers write ?code=a1c instead of the LOINC code.
@@ -644,9 +649,10 @@ func (s *Server) patientTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.db.Query(`
-		SELECT measured_at, 'observation', id, coalesce(name, label, 'Observation'),
-		       CASE WHEN value IS NOT NULL THEN printf('%g', value) || coalesce(' ' || unit, '') ELSE value_text END
-		  FROM observations WHERE `+ofPerson+` AND `+visibleObservation+`
+		SELECT o.measured_at, 'observation', o.id, coalesce(o.name, o.label, 'Observation'),
+		       CASE WHEN v.value IS NOT NULL THEN printf('%g', v.value) || coalesce(' ' || v.unit, '') ELSE v.value_text END
+		  FROM observations o LEFT JOIN observation_values v ON v.observation_id = o.id AND v.is_component = 0
+		  WHERE `+ofPerson+` AND `+visibleObservation+`
 		UNION ALL
 		SELECT onset_date, 'condition', id, coalesce(name, label, 'Unspecified condition'), clinical_status
 		  FROM conditions WHERE `+ofPerson+` AND coalesce(verification_status, '') <> 'entered-in-error'

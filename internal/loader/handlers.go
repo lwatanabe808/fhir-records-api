@@ -44,7 +44,7 @@ func removeFrom(table string) func(*sql.Tx, string) error {
 }
 
 func removeObservation(tx *sql.Tx, id string) error {
-	if _, err := tx.Exec(`DELETE FROM observation_components WHERE observation_id = ?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM observation_values WHERE observation_id = ?`, id); err != nil {
 		return err
 	}
 	return removeFrom("observations")(tx, id)
@@ -64,17 +64,23 @@ func removeDocument(tx *sql.Tx, id string) error {
 
 func insertPatient(rec *recordCtx) error {
 	r := rec.r
+	// FHIR permits name parts, plain text, or both:
+	// {given: [string, string], family: string}
+	// {text: string}
 	family := fhir.Str(r, "name", 0, "family")
 	var given []string
+	// given names are first and middle names as a slice.
 	for _, g := range fhir.List(r, "name", 0, "given") {
 		if s, ok := g.(string); ok {
 			given = append(given, s)
 		}
 	}
 	givenNames := strings.Join(given, " ")
-	fullName := strings.TrimSpace(givenNames + " " + family)
-	if text := fhir.Str(r, "name", 0, "text"); fullName == "" && text != "" {
-		fullName = text
+	// text is the full name as it should be displayed (FHIR's definition), so use it
+	// first, and build the name from the parts only when it's missing.
+	fullName := fhir.Str(r, "name", 0, "text")
+	if fullName == "" {
+		fullName = strings.TrimSpace(givenNames + " " + family)
 	}
 	birthDate, err := rec.date("birthDate")
 	if err != nil {
@@ -84,6 +90,7 @@ func insertPatient(rec *recordCtx) error {
 	if err != nil {
 		return err
 	}
+	// if not allowed, set to ""
 	gender := allowed(fhir.Str(r, "gender"), "male", "female", "other", "unknown")
 	var active any
 	if b, ok := r["active"].(bool); ok {
@@ -109,9 +116,21 @@ func insertPatient(rec *recordCtx) error {
 }
 
 // ---------- Observation ----------
-
+// Allowed values from FHIR R4's official value sets. The JSON schema only
+// checks some of these, so all of them are listed here. They were copied
+// from the pages below and kept in code, since HL7's full definitions file
+// is too large to embed for a few short lists that don't change in R4.
+// https://hl7.org/fhir/R4/valueset-observation-status.html
+// https://hl7.org/fhir/R4/valueset-administrative-gender.html
+// https://hl7.org/fhir/R4/valueset-document-reference-status.html
+// https://hl7.org/fhir/R4/valueset-medicationrequest-status.html
+// https://hl7.org/fhir/R4/valueset-medicationrequest-intent.html
+// https://hl7.org/fhir/R4/valueset-event-status.html
+// https://hl7.org/fhir/R4/valueset-condition-clinical.html
+// https://hl7.org/fhir/R4/valueset-condition-ver-status.html
 var observationStatuses = []string{"registered", "preliminary", "final", "amended", "corrected", "cancelled", "entered-in-error", "unknown"}
 
+// These are the supported "value" fields per FHIR.
 // FHIR allows only one value[x] per Observation. If a record has several,
 // we keep the first one in this fixed order (Go maps don't keep JSON key order).
 var valueFields = []string{"valueQuantity", "valueString", "valueCodeableConcept", "valueBoolean", "valueInteger",
@@ -159,6 +178,7 @@ func insertObservation(rec *recordCtx) error {
 		}
 	}
 
+	//
 	components := fhir.List(r, "component")
 	_, hasAbsentReason := r["dataAbsentReason"]
 	if len(present) == 0 && len(components) == 0 && !hasAbsentReason {
@@ -232,20 +252,32 @@ func insertObservation(rec *recordCtx) error {
 	}
 
 	if err := rec.l.exec(`INSERT INTO observations (id, raw_resource_id, patient_ref, code_system, lab_test_code, name, label,
-			status, measured_at, value, value_text, unit, last_updated, issued, is_impossible, is_implausible)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			status, measured_at, last_updated, issued, is_impossible, is_implausible)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.id, rec.line, patientRef, code.System, code.Code, code.Display, code.Text, status, measuredAt,
-		main.value, main.valueText, main.unit, lastUpdated, issued, impossible, implausible); err != nil {
+		lastUpdated, issued, impossible, implausible); err != nil {
 		return err
 	}
+
+	// The values: the single result if there is one, then each component.
+	if len(present) > 0 {
+		if err := saveValue(rec, false, code, main); err != nil {
+			return err
+		}
+	}
 	for _, c := range comps {
-		if err := rec.l.exec(`INSERT INTO observation_components (observation_id, code_system, lab_test_code, name, value, value_text, unit)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			rec.id, c.coding.System, c.coding.Code, c.coding.Name(), c.value.value, c.value.valueText, c.value.unit); err != nil {
+		if err := saveValue(rec, true, c.coding, c.value); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// saveValue saves one result value of the observation into observation_values.
+func saveValue(rec *recordCtx, isComponent bool, coding fhir.Coding, v obsValue) error {
+	return rec.l.exec(`INSERT INTO observation_values (observation_id, is_component, code_system, lab_test_code, name, value, value_text, unit)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		rec.id, isComponent, coding.System, coding.Code, coding.Name(), v.value, v.valueText, v.unit)
 }
 
 // presentValueFields lists the value[x] fields an observation or component has,

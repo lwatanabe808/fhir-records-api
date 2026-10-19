@@ -310,9 +310,11 @@ func (s *Server) duplicateGroups(ids []string) (dupOf map[string][]string, extra
 
 func (s *Server) latestLabs(code string) (map[string]latestLab, error) {
 	// Keyed by person: the latest value across all of a person's patient records.
-	rows, err := s.db.Query(`SELECT pt.person_id, o.value, coalesce(o.unit, ''), o.measured_at, coalesce(o.name, o.label, '')
-		FROM observations o JOIN patients pt ON pt.id = o.patient_id
-		WHERE o.lab_test_code = ? AND o.value IS NOT NULL AND `+usableObservation+`
+	// observation_values holds single results and components alike, so a part
+	// like systolic blood pressure can be searched by its own lab test code.
+	rows, err := s.db.Query(`SELECT pt.person_id, v.value, coalesce(v.unit, ''), o.measured_at, coalesce(v.name, o.name, o.label, '')
+		FROM observation_values v JOIN observations o ON o.id = v.observation_id JOIN patients pt ON pt.id = o.patient_id
+		WHERE v.lab_test_code = ? AND v.value IS NOT NULL AND `+usableObservation+`
 		ORDER BY pt.person_id, o.measured_at DESC`, code)
 	if err != nil {
 		return nil, err

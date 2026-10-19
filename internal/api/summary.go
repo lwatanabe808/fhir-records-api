@@ -36,23 +36,19 @@ func (s *Server) patientSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Latest visible result for each lab test code.
-	labs, err := s.rows(`SELECT id, test, code, date, value, value_text, unit FROM (
-			SELECT id, coalesce(name, label) AS test, lab_test_code AS code, measured_at AS date, value, value_text, unit,
+	labs, err := s.rows(`SELECT id, test, code, date FROM (
+			SELECT id, coalesce(name, label) AS test, lab_test_code AS code, measured_at AS date,
 			       ROW_NUMBER() OVER (PARTITION BY coalesce(code_system, ''), lab_test_code ORDER BY measured_at DESC, id) AS rn
 			FROM observations WHERE `+ofPerson+` AND lab_test_code IS NOT NULL AND `+visibleObservation+`)
-		WHERE rn = 1 ORDER BY test`, []string{"id", "test", "code", "date", "value", "valueText", "unit"}, id)
+		WHERE rn = 1 ORDER BY test`, []string{"id", "test", "code", "date"}, id)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 	for _, lab := range labs {
-		comps, err := s.components(lab["id"].(string))
-		if err != nil {
+		if err := s.addValues(lab); err != nil {
 			serverError(w, err)
 			return
-		}
-		if len(comps) > 0 {
-			lab["components"] = comps
 		}
 	}
 	procedures, err := s.rows(`SELECT id, coalesce(name, label), performed_at FROM procedures

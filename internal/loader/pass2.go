@@ -269,9 +269,9 @@ type obsRow struct {
 func (l *Loader) groupObservations() error {
 	rows, err := l.tx.Query(`SELECT o.id, coalesce(o.status, ''), coalesce(o.last_updated, ''), coalesce(o.issued, ''), o.raw_resource_id,
 			o.patient_id || '|' || coalesce(o.code_system, '') || '|' || o.lab_test_code || '|' || o.measured_at AS grp,
-			coalesce(o.value, '') || '|' || coalesce(o.value_text, '') || '|' || coalesce(o.unit, '') || '|' ||
-			coalesce((SELECT group_concat(coalesce(c.lab_test_code, '') || '=' || coalesce(c.value, '') || coalesce(c.unit, ''), ',')
-			          FROM observation_components c WHERE c.observation_id = o.id), '')
+			coalesce((SELECT group_concat(v.is_component || ':' || coalesce(v.lab_test_code, '') || '=' || coalesce(v.value, '') || '|' ||
+			                              coalesce(v.value_text, '') || '|' || coalesce(v.unit, ''), ',')
+			          FROM (SELECT * FROM observation_values WHERE observation_id = o.id ORDER BY rowid) v), '')
 		FROM observations o
 		WHERE o.patient_id IS NOT NULL AND o.lab_test_code IS NOT NULL AND o.measured_at LIKE '%T%'
 		  AND coalesce(o.status, '') <> 'entered-in-error'

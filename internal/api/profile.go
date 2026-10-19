@@ -29,7 +29,7 @@ func (s *Server) datasetProfile(w http.ResponseWriter, r *http.Request) {
 		"patientsWithGender":          `SELECT avg(gender IS NOT NULL) FROM patients`,
 		"recordsLinkedToPatient":      `SELECT avg(patient_id IS NOT NULL) FROM (SELECT patient_id FROM observations UNION ALL SELECT patient_id FROM conditions UNION ALL SELECT patient_id FROM medications UNION ALL SELECT patient_id FROM procedures UNION ALL SELECT patient_id FROM document_references)`,
 		"observationsWithLabTestCode": `SELECT avg(lab_test_code IS NOT NULL) FROM observations`,
-		"numericResultsWithUnit":      `SELECT avg(unit IS NOT NULL) FROM observations WHERE value IS NOT NULL`,
+		"numericResultsWithUnit":      `SELECT avg(unit IS NOT NULL) FROM observation_values WHERE is_component = 0 AND value IS NOT NULL`,
 		"conditionsWithDiseaseCode":   `SELECT avg(disease_code IS NOT NULL) FROM conditions`,
 		"medicationsWithDrugCode":     `SELECT avg(drug_code IS NOT NULL) FROM medications`,
 		"medicationsWithDosage":       `SELECT avg(dosage IS NOT NULL) FROM medications`,

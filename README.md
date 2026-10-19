@@ -156,7 +156,7 @@ Principles:
 
 ```
 raw_resources ─┬─ patients
- (every line)  ├─ observations ── observation_components   (e.g. systolic, diastolic)
+ (every line)  ├─ observations ── observation_values   (every result value)
                ├─ conditions
                ├─ medications
                ├─ procedures
@@ -166,6 +166,7 @@ raw_resources ─┬─ patients
 
 - Every clean table has `raw_resource_id`, the line it came from.
 - `observations` has `is_primary` and `replaced_by` for duplicates and corrections, and `is_impossible` / `is_implausible` flags.
+- `observation_values` holds every result value in one place. A single result like A1c 7.8 % is one row. A multi-part result like blood pressure has one row per part (systolic, diastolic), each with its own lab test code. So any query for a lab test code finds its numbers in one table, wherever FHIR put them. For example, `/research/labs/8480-6` summarizes systolic blood pressure.
 - `document_attachments` is a link table because a note can have several attachments and several notes can share one Binary. Inline attachments (base64 inside the note) are stored in `binaries` with a generated id like `docref-001-inline-1`.
 - `issues` has a `group_key` that ties together records in the same duplicate or correction group.
 - Indexes match how the data is read: a patient's results for one test, everyone's results for one test (research), codes for cohort filters, and issues by record, type, severity and group. Checked with `EXPLAIN QUERY PLAN`. Name search uses `LIKE '%...%'`, which can't use an index; full-text search (SQLite FTS5) would fix that at scale.

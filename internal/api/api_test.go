@@ -413,3 +413,13 @@ func TestSSNNeverReturned(t *testing.T) {
 		t.Errorf("SSN should be masked and other identifiers kept: %s", body)
 	}
 }
+
+func TestComponentSearchableByOwnCode(t *testing.T) {
+	// Systolic blood pressure is stored as a component, but observation_values
+	// lets research find it by its own lab test code.
+	h := newTestServerWithCell(t, "../../data/fhir-resources.jsonl", 1)
+	body := get(t, h, "/research/labs/8480-6", http.StatusOK)
+	if !strings.Contains(body, `"mmHg"`) || !strings.Contains(body, `"patientsWithoutDuplicates": 16`) {
+		t.Errorf("systolic should be found for all 16 patients: %s", body)
+	}
+}

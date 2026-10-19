@@ -47,9 +47,6 @@ CREATE TABLE observations (
   label           TEXT,
   status          TEXT,
   measured_at     TEXT,
-  value           REAL,
-  value_text      TEXT,
-  unit            TEXT,
   last_updated    TEXT,
   issued          TEXT,
   is_primary      INTEGER NOT NULL DEFAULT 1,  -- 0 when another record in its duplicate group wins
@@ -62,8 +59,14 @@ CREATE INDEX idx_obs_patient_test ON observations(patient_id, lab_test_code, mea
 -- Everyone's results for one test (research cohort and lab summary).
 CREATE INDEX idx_obs_test_patient ON observations(lab_test_code, patient_id, measured_at);
 
-CREATE TABLE observation_components (
+-- Every result value of an observation, in one place.
+--   A single result (A1c 7.8 %): one row, is_component = 0, with the observation's own lab test code.
+--   A multi-part result (blood pressure): one row per part (systolic 120, diastolic 80),
+--   is_component = 1, each with its own lab test code.
+-- So any query for a lab test code finds its numbers here, wherever FHIR put them.
+CREATE TABLE observation_values (
   observation_id TEXT NOT NULL,
+  is_component   INTEGER NOT NULL,
   code_system    TEXT,
   lab_test_code  TEXT,
   name           TEXT,
@@ -71,7 +74,8 @@ CREATE TABLE observation_components (
   value_text     TEXT,
   unit           TEXT
 );
-CREATE INDEX idx_comp_obs ON observation_components(observation_id);
+CREATE INDEX idx_values_obs ON observation_values(observation_id);
+CREATE INDEX idx_values_code ON observation_values(lab_test_code);
 
 CREATE TABLE conditions (
   id                  TEXT PRIMARY KEY,

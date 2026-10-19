@@ -43,7 +43,7 @@ func TestScenarioCleanFile(t *testing.T) {
 	}
 	wantValue(t, db, `SELECT full_name FROM patients WHERE id = 'pt-100'`, "Maria Elena García")
 	wantValue(t, db, `SELECT measured_at FROM observations WHERE id = 'ob-102'`, "2025-06-02T08:00:00Z") // +02:00 stored as UTC
-	wantValue(t, db, `SELECT value_text FROM observations WHERE id = 'ob-103'`, "Never smoked tobacco")
+	wantValue(t, db, `SELECT value_text FROM observation_values WHERE is_component = 0 AND observation_id = 'ob-103'`, "Never smoked tobacco")
 	wantValue(t, db, `SELECT performed_at FROM procedures WHERE id = 'pr-100'`, "2024-02-10T08:00:00Z")
 	wantValue(t, db, `SELECT onset_date FROM conditions WHERE id = 'co-100'`, "2019")
 	wantValue(t, db, `SELECT text FROM binaries WHERE id = 'bn-100'`, "Señora García feels well. ✓")
@@ -127,7 +127,7 @@ func TestScenarioTwoClinics(t *testing.T) {
 	wantValue(t, db, `SELECT COUNT(*) FROM patients`, "2") // never merged
 	wantIssue(t, db, "b-ob-9", DuplicateRecord)
 	wantIssue(t, db, "a-ob-2", DuplicateID)
-	wantValue(t, db, `SELECT value FROM observations WHERE id = 'a-ob-3'`, "6.8") // newer lastUpdated wins over file order
+	wantValue(t, db, `SELECT value FROM observation_values WHERE is_component = 0 AND observation_id = 'a-ob-3'`, "6.8") // newer lastUpdated wins over file order
 	wantValue(t, db, `SELECT replaced_by FROM observations WHERE id = 'a-ob-4'`, "a-ob-5")
 }
 
@@ -149,9 +149,9 @@ func TestScenarioValues(t *testing.T) {
 	wantIssue(t, db, "ob-1101", ImplausibleValue) // glucose 0
 	wantIssue(t, db, "ob-1103", ImplausibleValue) // 1,000,000,000 kg
 	wantIssue(t, db, "ob-1104", InvalidValueType) // true as a value
-	wantValue(t, db, `SELECT value FROM observations WHERE id = 'ob-1104'`, "NULL")
-	wantValue(t, db, `SELECT value FROM observations WHERE id = 'ob-1106'`, "170")
-	wantValue(t, db, `SELECT value_text FROM observations WHERE id = 'ob-1107'`, "normal")
+	wantValue(t, db, `SELECT value FROM observation_values WHERE is_component = 0 AND observation_id = 'ob-1104'`, "NULL")
+	wantValue(t, db, `SELECT value FROM observation_values WHERE is_component = 0 AND observation_id = 'ob-1106'`, "170")
+	wantValue(t, db, `SELECT value_text FROM observation_values WHERE is_component = 0 AND observation_id = 'ob-1107'`, "normal")
 	if got := issueTypes(t, db, "ob-1108"); len(got) != 0 { // dataAbsentReason explains the missing value
 		t.Errorf("ob-1108: want no issues, got %v", got)
 	}
