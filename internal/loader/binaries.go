@@ -9,7 +9,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/lwatanabe808/novellia-fhir-api/internal/fhir"
-	"github.com/lwatanabe808/novellia-fhir-api/internal/store"
 )
 
 // ---------- DocumentReference ----------
@@ -30,10 +29,10 @@ func insertDocumentReference(rec *recordCtx) error {
 	noteType := fhir.FirstCoding(r["type"])
 	status := allowed(fhir.Str(r, "status"), "current", "superseded", "entered-in-error")
 	author := fhir.Str(r, "author", 0, "reference")
-	if err := exec(rec, `INSERT INTO document_references (id, raw_resource_id, patient_ref, status, note_type, note_type_code, date, author)
+	if err := rec.l.exec(`INSERT INTO document_references (id, raw_resource_id, patient_ref, status, note_type, note_type_code, date, author)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.id, rec.line, store.Nullable(patientRef), store.Nullable(status), store.Nullable(noteType.Name()),
-		store.Nullable(noteType.Code), store.Nullable(date), store.Nullable(author)); err != nil {
+		rec.id, rec.line, patientRef, status, noteType.Name(),
+		noteType.Code, date, author); err != nil {
 		return err
 	}
 
@@ -87,16 +86,14 @@ func insertDocumentReference(rec *recordCtx) error {
 }
 
 func linkAttachment(rec *recordCtx, binaryID, declaredType string) error {
-	return exec(rec, `INSERT OR IGNORE INTO document_attachments (document_id, binary_id, content_type) VALUES (?, ?, ?)`,
-		rec.id, binaryID, store.Nullable(baseType(declaredType)))
+	return rec.l.exec(`INSERT OR IGNORE INTO document_attachments (document_id, binary_id, content_type) VALUES (?, ?, ?)`,
+		rec.id, binaryID, baseType(declaredType))
 }
 
 // ---------- Binary ----------
 
 func insertBinaryResource(rec *recordCtx) error {
-	data, _ := rec.r["data"].(string)
-	contentType, _ := rec.r["contentType"].(string)
-	return rec.storeBinary(rec.id, contentType, data, false)
+	return rec.storeBinary(rec.id, fhir.Str(rec.r, "contentType"), fhir.Str(rec.r, "data"), false)
 }
 
 // storeBinary checks and decodes base64 content and stores it in binaries.
@@ -124,61 +121,51 @@ func (rec *recordCtx) storeBinary(id, declaredType, data string, inline bool) er
 	}
 
 	var decoded []byte
-	var size any
-	var text any
+	var size, text any
 	if data != "" {
 		// Strict base64: Go's decoder rejects bad characters instead of skipping them.
-		clean := strings.Join(strings.Fields(data), "")
-		b, err := base64.StdEncoding.Strict().DecodeString(clean)
-		if err != nil {
-			if err := exec(rec, `INSERT INTO binaries (id, raw_resource_id, content_type, is_inline) VALUES (?, ?, ?, ?)`,
-				id, rec.line, contentType, inline); err != nil {
-				return err
-			}
-			return rec.issue(InvalidBinary, Warning, field, "data is not valid base64: "+err.Error(), "data and text stored as null")
-		}
-		size = len(b)
-		if len(b) > rec.l.cfg.MaxBinaryBytes {
-			if err := exec(rec, `INSERT INTO binaries (id, raw_resource_id, content_type, size_bytes, is_inline) VALUES (?, ?, ?, ?, ?)`,
-				id, rec.line, contentType, size, inline); err != nil {
-				return err
-			}
-			return rec.issue(FileTooLarge, Warning, field,
-				fmt.Sprintf("%d bytes is over the %d byte limit", len(b), rec.l.cfg.MaxBinaryBytes), "data not stored")
-		}
-		decoded = b
-
-		// Check the label against the actual bytes.
+		b, err := base64.StdEncoding.Strict().DecodeString(strings.Join(strings.Fields(data), ""))
 		detected := baseType(http.DetectContentType(b))
-		if !labeled {
-			// No usable label: stay application/octet-stream, as reported above.
-		} else if isTextual(contentType) {
-			if utf8.Valid(b) {
-				text = string(b)
-			} else {
+		switch {
+		case err != nil:
+			if err := rec.issue(InvalidBinary, Warning, field, "data is not valid base64: "+err.Error(), "data and text stored as null"); err != nil {
+				return err
+			}
+		case len(b) > rec.l.cfg.MaxBinaryBytes:
+			size = len(b)
+			if err := rec.issue(FileTooLarge, Warning, field,
+				fmt.Sprintf("%d bytes is over the %d byte limit", len(b), rec.l.cfg.MaxBinaryBytes), "data not stored"); err != nil {
+				return err
+			}
+		// From here on the data is stored. Check its label against the actual bytes.
+		case !labeled:
+			size, decoded = len(b), b // no usable label: stays application/octet-stream, as reported above
+		case isTextual(contentType) && utf8.Valid(b):
+			size, decoded, text = len(b), b, string(b)
+		case isTextual(contentType):
+			size, decoded = len(b), b
+			if err := rec.issue(ContentTypeConflict, Warning, "contentType",
+				fmt.Sprintf("labeled %s, but the data is not readable text (looks like %s)", contentType, detected), "text stored as null, stored detected type"); err != nil {
+				return err
+			}
+			contentType = detected
+		default:
+			size, decoded = len(b), b
+			if detected != "application/octet-stream" && detected != contentType {
 				if err := rec.issue(ContentTypeConflict, Warning, "contentType",
-					fmt.Sprintf("labeled %s, but the data is not readable text (looks like %s)", contentType, detected), "text stored as null, stored detected type"); err != nil {
+					fmt.Sprintf("labeled %s, but the data looks like %s", contentType, detected), "stored detected type"); err != nil {
 					return err
 				}
 				contentType = detected
 			}
-		} else if detected != "application/octet-stream" && detected != contentType {
-			if err := rec.issue(ContentTypeConflict, Warning, "contentType",
-				fmt.Sprintf("labeled %s, but the data looks like %s", contentType, detected), "stored detected type"); err != nil {
-				return err
-			}
-			contentType = detected
 		}
 	}
-	return exec(rec, `INSERT INTO binaries (id, raw_resource_id, content_type, size_bytes, text, data, is_inline)
+	return rec.l.exec(`INSERT INTO binaries (id, raw_resource_id, content_type, size_bytes, text, data, is_inline)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`, id, rec.line, contentType, size, text, decoded, inline)
 }
 
 // baseType returns "text/plain" for "text/plain; charset=utf-8", or "" if invalid.
 func baseType(contentType string) string {
-	if contentType == "" {
-		return ""
-	}
 	t, _, err := mime.ParseMediaType(contentType)
 	if err != nil || !strings.Contains(t, "/") {
 		return ""

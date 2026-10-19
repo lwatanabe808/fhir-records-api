@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/lwatanabe808/novellia-fhir-api/internal/fhir"
-	"github.com/lwatanabe808/novellia-fhir-api/internal/store"
 	"github.com/lwatanabe808/novellia-fhir-api/internal/validate"
 )
 
@@ -44,15 +43,15 @@ type Config struct {
 
 // Summary is what the loader reports when it finishes.
 type Summary struct {
-	Lines      int            `json:"lines"`
-	BlankLines int            `json:"blankLines"`
-	Loaded     int            `json:"loaded"`
-	RawOnly    int            `json:"rawOnly"`
-	Failed     int            `json:"failed"`
-	ByType     map[string]int `json:"byType"`
-	IssueCount int            `json:"issues"`
-	DurationMS int64          `json:"durationMs"`
-	SourceFile string         `json:"sourceFile"`
+	Lines       int            `json:"lines"`
+	BlankLines  int            `json:"blankLines"`
+	Loaded      int            `json:"loaded"`
+	RawOnly     int            `json:"rawOnly"`
+	Failed      int            `json:"failed"`
+	CountByType map[string]int `json:"countByType"`
+	IssueCount  int            `json:"issues"`
+	DurationMS  int64          `json:"durationMs"`
+	SourceFile  string         `json:"sourceFile"`
 }
 
 // Loader holds the state of one load.
@@ -101,7 +100,7 @@ func Load(ctx context.Context, db *sql.DB, r io.Reader, schema *validate.Schema,
 		tx:      tx,
 		schema:  schema,
 		cfg:     cfg,
-		summary: Summary{ByType: map[string]int{}},
+		summary: Summary{CountByType: map[string]int{}},
 		seen:    map[string]seenRecord{},
 	}
 
@@ -154,26 +153,27 @@ func (l *Loader) processLine(lineNo int64, line []byte) error {
 	var parsed any
 	if err := json.Unmarshal(line, &parsed); err != nil {
 		l.summary.Failed++
-		if _, err := l.tx.Exec(`INSERT INTO raw_resources (id, parsed_ok, raw_text) VALUES (?, 0, ?)`, lineNo, string(line)); err != nil {
+		if err := l.exec(`INSERT INTO raw_resources (id, parsed_ok, raw_text) VALUES (?, 0, ?)`, lineNo, string(line)); err != nil {
 			return err
 		}
 		return l.addIssue(Issue{RawResourceID: lineNo, Type: InvalidJSON, Severity: Error,
 			Detail: err.Error(), ActionTaken: "skipped line"})
 	}
 
-	// Valid JSON, but is it a record at all?
+	// type assertion that parsed is a map
 	record, isObject := parsed.(map[string]any)
+	// type assertion that resourceType is a string
 	resourceType, _ := record["resourceType"].(string)
 	if !isObject || resourceType == "" {
 		l.summary.Failed++
-		if _, err := l.tx.Exec(`INSERT INTO raw_resources (id, parsed_ok, raw_text) VALUES (?, 1, ?)`, lineNo, string(line)); err != nil {
+		if err := l.exec(`INSERT INTO raw_resources (id, parsed_ok, raw_text) VALUES (?, 1, ?)`, lineNo, string(line)); err != nil {
 			return err
 		}
-		return l.addIssue(Issue{RawResourceID: lineNo, Type: MalformedRecord, Severity: Error,
+		return l.addIssue(Issue{RawResourceID: lineNo, Type: MalformedResource, Severity: Error,
 			Detail: "line is valid JSON but not an object with a resourceType", ActionTaken: "stored raw only"})
 	}
 	id, _ := record["id"].(string)
-	l.summary.ByType[resourceType]++
+	l.summary.CountByType[resourceType]++
 
 	rec := &recordCtx{l: l, line: lineNo, resourceType: resourceType, id: id, r: record, raw: line, flagged: map[string]bool{}}
 
@@ -190,15 +190,18 @@ func (l *Loader) processLine(lineNo int64, line []byte) error {
 		return err
 	}
 
-	// Step 2: is this a real FHIR type?
+	// Step 2: is this line a valid FHIR type?
 	if !l.schema.IsFHIRType(resourceType) {
 		l.summary.RawOnly++
 		return rec.issue(NonStandardType, Warning, "resourceType", resourceType+" is not a FHIR R4 resource type", "stored raw only")
 	}
+	// If no id, we cannot add an id because it would be difficult to determine if it appears twice. Right now, we reference the id to determine if it appears twice.
 	if id == "" {
 		l.summary.RawOnly++
 		return rec.issue(MissingID, Error, "id", "record has no id, so nothing can link to it", "stored raw only")
 	}
+	// Do we support this type
+	// if we do, get the handler to insert the data
 	h, supported := handlers[resourceType]
 	if !supported {
 		l.summary.RawOnly++
@@ -228,30 +231,28 @@ func (l *Loader) processLine(lineNo int64, line []byte) error {
 	return nil
 }
 
+// runHandler runs the type's insert function. Handlers only return errors when
+// the database fails; bad data becomes issues. A panic on an unexpected record
+// shape becomes an issue too, so one record can't stop the load.
 func (l *Loader) runHandler(rec *recordCtx, h handler) (err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			err = rec.issue(ProcessingError, Error, "", fmt.Sprint(p), "record skipped")
 		}
 	}()
-	if herr := h.insert(rec); herr != nil {
-		if isDBError(herr) {
-			return herr
-		}
-		return rec.issue(ProcessingError, Error, "", herr.Error(), "record skipped")
-	}
-	return nil
+	return h.insert(rec)
 }
 
-// dbError marks errors that should stop the load (the database itself failed).
-type dbError struct{ err error }
-
-func (e dbError) Error() string { return e.err.Error() }
-func (e dbError) Unwrap() error { return e.err }
-
-func isDBError(err error) bool {
-	var d dbError
-	return errors.As(err, &d)
+// exec runs one SQL statement. Empty strings are saved as NULL, so the clean
+// tables never hold "" and a missing value always looks the same.
+func (l *Loader) exec(query string, args ...any) error {
+	for i, a := range args {
+		if s, ok := a.(string); ok && s == "" {
+			args[i] = nil
+		}
+	}
+	_, err := l.tx.Exec(query, args...)
+	return err
 }
 
 func (l *Loader) insertRaw(rec *recordCtx, keepJSON bool) error {
@@ -263,9 +264,8 @@ func (l *Loader) insertRaw(rec *recordCtx, keepJSON bool) error {
 	if keepJSON {
 		rawJSON = string(rec.raw)
 	}
-	_, err := l.tx.Exec(`INSERT INTO raw_resources (id, resource_type, fhir_id, patient_ref, parsed_ok, raw_json)
-		VALUES (?, ?, ?, ?, 1, ?)`, rec.line, rec.resourceType, store.Nullable(rec.id), store.Nullable(patientRef), rawJSON)
-	return err
+	return l.exec(`INSERT INTO raw_resources (id, resource_type, fhir_id, patient_ref, parsed_ok, raw_json)
+		VALUES (?, ?, ?, ?, 1, ?)`, rec.line, rec.resourceType, rec.id, patientRef, rawJSON)
 }
 
 // checkDuplicateID handles a type + id that was already loaded.
@@ -345,15 +345,20 @@ func isDateField(field string) bool {
 	return strings.HasSuffix(last, "DateTime")
 }
 
-func (l *Loader) addIssue(i Issue) error {
-	_, err := l.tx.Exec(`INSERT INTO issues (raw_resource_id, record_type, record_id, issue_type, severity, field, detail, action_taken, group_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		nullableInt(i.RawResourceID), store.Nullable(i.RecordType), store.Nullable(i.RecordID), i.Type, i.Severity,
-		store.Nullable(i.Field), store.Nullable(i.Detail), store.Nullable(i.ActionTaken), store.Nullable(i.GroupKey))
-	if err != nil {
-		return dbError{err}
+// addIssues saves several issues, in order.
+func (l *Loader) addIssues(issues []Issue) error {
+	for _, i := range issues {
+		if err := l.addIssue(i); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func (l *Loader) addIssue(i Issue) error {
+	return l.exec(`INSERT INTO issues (raw_resource_id, record_type, record_id, issue_type, severity, field, detail, action_taken, group_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		nullableInt(i.RawResourceID), i.RecordType, i.RecordID, i.Type, i.Severity, i.Field, i.Detail, i.ActionTaken, i.GroupKey)
 }
 
 func nullableInt(n int64) any {

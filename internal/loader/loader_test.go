@@ -18,7 +18,7 @@ func load(t *testing.T, path string) (*sql.DB, Summary) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	schema, err := validate.NewSchema()
+	schema, err := validate.NewSchema(SupportedTypes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,12 +134,12 @@ func TestMessyFile(t *testing.T) {
 			t.Errorf("%s: issues %v, want %s", c.record, got, c.want)
 		}
 	}
-	for _, typ := range []string{InvalidJSON, MalformedRecord, MissingID} {
+	for _, typ := range []string{InvalidJSON, MalformedResource, MissingID} {
 		if issueOnLine(t, db, typ) == 0 {
 			t.Errorf("no %s issue logged", typ)
 		}
 	}
-	if n := issueOnLine(t, db, MalformedRecord); n != 2 {
+	if n := issueOnLine(t, db, MalformedResource); n != 2 {
 		t.Errorf("MALFORMED_RESOURCE count = %d, want 2", n)
 	}
 

@@ -42,11 +42,3 @@ func Open(path string) (*sql.DB, error) {
 	}
 	return db, nil
 }
-
-// Nullable turns "" into SQL NULL, so clean tables never store empty strings.
-func Nullable(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
-}

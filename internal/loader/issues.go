@@ -3,13 +3,17 @@ package loader
 // Issue types. Each one matches a row in the validation cases table in the README.
 const (
 	// Parsing
-	InvalidJSON     = "INVALID_JSON"
-	RecordTooLarge  = "RECORD_TOO_LARGE"
-	ProcessingError = "PROCESSING_ERROR"
-	MalformedRecord = "MALFORMED_RESOURCE"
-	NonStandardType = "NON_STANDARD_TYPE"
-	UnsupportedType = "UNSUPPORTED_TYPE"
-	MissingID       = "MISSING_ID"
+	InvalidJSON       = "INVALID_JSON"
+	RecordTooLarge    = "RECORD_TOO_LARGE"
+	ProcessingError   = "PROCESSING_ERROR"
+	MalformedResource = "MALFORMED_RESOURCE"
+	NonStandardType   = "NON_STANDARD_TYPE"
+	UnsupportedType   = "UNSUPPORTED_TYPE"
+	MissingID         = "MISSING_ID"
+
+	// Same type and id seen earlier in the file
+	DuplicateID        = "DUPLICATE_ID"
+	DuplicateIDChanged = "DUPLICATE_ID_CHANGED"
 
 	// Found by the FHIR schema check
 	InvalidStatus    = "INVALID_STATUS"
@@ -28,6 +32,7 @@ const (
 	EmptyList         = "EMPTY_LIST"
 	ImpossibleValue   = "IMPOSSIBLE_VALUE"
 	ImplausibleValue  = "IMPLAUSIBLE_VALUE"
+	InvalidSSN        = "INVALID_SSN"
 
 	// Binaries and attachments
 	InvalidBinary            = "INVALID_BINARY"
@@ -45,14 +50,11 @@ const (
 	UnknownPatient           = "UNKNOWN_PATIENT"
 	BinaryBrokenReference    = "BINARY_BROKEN_REFERENCE"
 	OrphanBinary             = "ORPHAN_BINARY"
-	DuplicateID              = "DUPLICATE_ID"
-	DuplicateIDChanged       = "DUPLICATE_ID_CHANGED"
 	DuplicateRecord          = "DUPLICATE_RECORD"
 	Superseded               = "SUPERSEDED"
 	PossibleDuplicatePatient = "POSSIBLE_DUPLICATE_PATIENT"
 	SamePersonBySSN          = "SAME_PERSON_BY_SSN"
 	SSNConflict              = "SSN_CONFLICT"
-	InvalidSSN               = "INVALID_SSN"
 )
 
 // Severity levels.

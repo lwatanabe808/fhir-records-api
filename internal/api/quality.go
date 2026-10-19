@@ -48,26 +48,17 @@ func (s *Server) qualitySummary(w http.ResponseWriter, r *http.Request) {
 
 	// Completeness: how often key fields are filled in. This is what research
 	// partners ask about first ("how complete is your data?").
-	completeness := map[string]any{}
-	checks := map[string]string{
+	completeness, err := s.percentages(map[string]string{
 		"patientsWithBirthDate":       `SELECT avg(birth_date IS NOT NULL) FROM patients`,
 		"patientsWithGender":          `SELECT avg(gender IS NOT NULL) FROM patients`,
 		"observationsLinkedToPatient": `SELECT avg(patient_id IS NOT NULL) FROM observations`,
 		"observationsWithCode":        `SELECT avg(lab_test_code IS NOT NULL) FROM observations`,
 		"conditionsWithCode":          `SELECT avg(disease_code IS NOT NULL) FROM conditions`,
 		"notesWithText":               `SELECT avg(EXISTS (SELECT 1 FROM document_attachments a JOIN binaries b ON b.id = a.binary_id WHERE a.document_id = d.id AND b.text IS NOT NULL)) FROM document_references d`,
-	}
-	for key, q := range checks {
-		var v sql.NullFloat64
-		if err := s.db.QueryRow(q).Scan(&v); err != nil {
-			serverError(w, err)
-			return
-		}
-		if v.Valid {
-			completeness[key] = float64(int(v.Float64*1000+0.5)) / 10 // percent, one decimal
-		} else {
-			completeness[key] = nil
-		}
+	})
+	if err != nil {
+		serverError(w, err)
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

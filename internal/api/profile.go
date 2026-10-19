@@ -64,7 +64,8 @@ func (s *Server) datasetProfile(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	allIDs, err := s.patientIDs()
+	// One id per person: people confirmed by SSN count once.
+	allIDs, err := s.stringList(`SELECT id FROM patients WHERE id = person_id ORDER BY id`)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -259,33 +260,11 @@ func (s *Server) population() (map[string]any, error) {
 	return map[string]any{"ageBands": s.suppress(ages), "gender": s.suppress(genders)}, rows.Err()
 }
 
-// suppress hides counts below the minimum cell size.
+// suppress hides each count below the minimum cell size (see cell).
 func (s *Server) suppress(counts map[string]int) map[string]any {
 	out := map[string]any{}
 	for k, n := range counts {
-		if n > 0 && n < s.minCellSize {
-			out[k] = fmt.Sprintf("<%d", s.minCellSize)
-		} else {
-			out[k] = n
-		}
+		out[k] = s.cell(n)
 	}
 	return out
-}
-
-// patientIDs lists one id per person (people confirmed by SSN count once).
-func (s *Server) patientIDs() ([]string, error) {
-	rows, err := s.db.Query(`SELECT id FROM patients WHERE id = person_id ORDER BY id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
 }

@@ -8,7 +8,6 @@ package fhir
 
 import (
 	"regexp"
-	"strings"
 	"time"
 )
 
@@ -133,10 +132,4 @@ func ParseDate(s string) (normalized string, t time.Time, ok bool) {
 		return "", time.Time{}, false
 	}
 	return parsed.UTC().Format(time.RFC3339), parsed.UTC(), true
-}
-
-// HasTime reports whether a normalized date includes a time of day.
-// Duplicate detection only trusts exact timestamps, never bare dates.
-func HasTime(normalized string) bool {
-	return strings.Contains(normalized, "T")
 }

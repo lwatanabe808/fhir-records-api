@@ -25,20 +25,14 @@ func main() {
 	maxBinaryMB := envInt("MAX_BINARY_MB", 5) // default 5
 	// if one line (record) is too large
 	maxRecordMB := envInt("MAX_RECORD_MB", 10) // default 10
-	// protects privacy in research results. Any count under 5 shows as "<5". If a partner sees “2 patients with this rare disease in this age group”
+	// protects privacy in research results: any count under 5 shows as "<5", so a small group can't point to one person
 	minCellSize := envInt("MIN_CELL_SIZE", 5) // default 5
 	// secret for hashing patient ids into the ids research partners see
-	patientIDSecret := env("PATIENT_ID_SECRET", "dev-only-patient-id-secret-change-me")
-	if patientIDSecret == "dev-only-patient-id-secret-change-me" {
-		log.Println("warning: PATIENT_ID_SECRET is not set, using the development default")
-	}
+	patientIDSecret := secretEnv("PATIENT_ID_SECRET")
 	// secret for hashing SSNs, used to match people across clinics
-	ssnSecret := env("SSN_SECRET", "dev-only-ssn-secret-change-me")
-	if ssnSecret == "dev-only-ssn-secret-change-me" {
-		log.Println("warning: SSN_SECRET is not set, using the development default")
-	}
+	ssnSecret := secretEnv("SSN_SECRET")
 
-	schema, err := validate.NewSchema()
+	schema, err := validate.NewSchema(loader.SupportedTypes())
 	if err != nil {
 		log.Fatalf("load FHIR schema: %v", err)
 	}
@@ -50,11 +44,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("open database: %v", err)
 	}
+	// closes db when main() ends
 	defer db.Close()
 
+	// custom function that writes a transaction to save data to db
 	summary, err := loader.LoadFile(context.Background(), db, dataFile, schema, loader.Config{
-		MaxBinaryBytes: maxBinaryMB << 20,
-		MaxRecordBytes: maxRecordMB << 20,
+		MaxBinaryBytes: maxBinaryMB * 1_000_000,
+		MaxRecordBytes: maxRecordMB * 1_000_000,
 		Ranges:         ranges,
 		SSNSecret:      []byte(ssnSecret),
 	})
@@ -91,6 +87,16 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// secretEnv reads a secret setting. Without one it uses a development default
+// and warns, so the app still runs locally but nobody mistakes it for production.
+func secretEnv(key string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	log.Printf("warning: %s is not set, using a development default", key)
+	return "dev-only-" + key + "-change-me"
 }
 
 func envInt(key string, def int) int {

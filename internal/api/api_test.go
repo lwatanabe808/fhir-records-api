@@ -26,7 +26,7 @@ func newTestServerWithCell(t *testing.T, file string, minCellSize int) http.Hand
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	schema, _ := validate.NewSchema()
+	schema, _ := validate.NewSchema(loader.SupportedTypes())
 	ranges, _ := validate.LoadRanges("")
 	sum, err := loader.LoadFile(context.Background(), db, file, schema, loader.Config{
 		MaxBinaryBytes: 100, MaxRecordBytes: 2000, Ranges: ranges,

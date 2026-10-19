@@ -99,6 +99,16 @@ func (rec *recordCtx) date(path ...any) (string, error) {
 }
 
 // allowed returns the value if it is in the allowed set, otherwise "".
+// dateOrStart reads a dateTime field, or the start of a period field when the
+// dateTime is missing (FHIR allows either, e.g. effectiveDateTime or effectivePeriod).
+func (rec *recordCtx) dateOrStart(dateField, periodField string) (string, error) {
+	d, err := rec.date(dateField)
+	if err != nil || d != "" {
+		return d, err
+	}
+	return rec.date(periodField, "start")
+}
+
 // Invalid statuses are reported by the schema check; here we only keep them out of the clean table.
 func allowed(value string, set ...string) string {
 	for _, s := range set {

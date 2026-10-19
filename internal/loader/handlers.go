@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/lwatanabe808/novellia-fhir-api/internal/fhir"
-	"github.com/lwatanabe808/novellia-fhir-api/internal/store"
 	"github.com/lwatanabe808/novellia-fhir-api/internal/validate"
 )
 
@@ -28,11 +27,13 @@ var handlers = map[string]handler{
 	"Binary":            {insertBinaryResource, removeFrom("binaries")},
 }
 
-func exec(rec *recordCtx, query string, args ...any) error {
-	if _, err := rec.l.tx.Exec(query, args...); err != nil {
-		return dbError{err}
+// SupportedTypes lists the record types that have a handler, for building schema checkers.
+func SupportedTypes() []string {
+	var types []string
+	for t := range handlers {
+		types = append(types, t)
 	}
-	return nil
+	return types
 }
 
 func removeFrom(table string) func(*sql.Tx, string) error {
@@ -99,12 +100,12 @@ func insertPatient(rec *recordCtx) error {
 		ssnHash = hashSSN(rec.l.cfg.SSNSecret, digits)
 	}
 
-	return exec(rec, `INSERT INTO patients (id, raw_resource_id, full_name, family_name, given_names, gender, birth_date,
+	return rec.l.exec(`INSERT INTO patients (id, raw_resource_id, full_name, family_name, given_names, gender, birth_date,
 			deceased_date, active, name_key, ssn_hash, person_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.id, rec.line, store.Nullable(fullName), store.Nullable(family), store.Nullable(givenNames),
-		store.Nullable(gender), store.Nullable(birthDate), store.Nullable(deceased), active,
-		store.Nullable(nameKey(fullName)), store.Nullable(ssnHash), rec.id)
+		rec.id, rec.line, fullName, family, givenNames,
+		gender, birthDate, deceased, active,
+		nameKey(fullName), ssnHash, rec.id)
 }
 
 // ---------- Observation ----------
@@ -132,14 +133,9 @@ func insertObservation(rec *recordCtx) error {
 	if err != nil {
 		return err
 	}
-	measuredAt, err := rec.date("effectiveDateTime")
+	measuredAt, err := rec.dateOrStart("effectiveDateTime", "effectivePeriod")
 	if err != nil {
 		return err
-	}
-	if measuredAt == "" {
-		if measuredAt, err = rec.date("effectivePeriod", "start"); err != nil {
-			return err
-		}
 	}
 	lastUpdated, _ := rec.date("meta", "lastUpdated")
 	issued, err := rec.date("issued")
@@ -149,12 +145,7 @@ func insertObservation(rec *recordCtx) error {
 	status := allowed(fhir.Str(r, "status"), observationStatuses...)
 
 	// The main value.
-	var present []string
-	for _, f := range valueFields {
-		if _, ok := r[f]; ok {
-			present = append(present, f)
-		}
-	}
+	present := presentValueFields(r)
 	var main obsValue
 	if len(present) > 1 {
 		if err := rec.issue(MultipleValues, Warning, strings.Join(present, ", "),
@@ -204,28 +195,21 @@ func insertObservation(rec *recordCtx) error {
 		}
 	}
 
-	if err := exec(rec, `INSERT INTO observations (id, raw_resource_id, patient_ref, code_system, lab_test_code, name, label,
-			status, measured_at, value, value_text, unit, last_updated, issued, is_impossible, is_implausible)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.id, rec.line, store.Nullable(patientRef), store.Nullable(code.System), store.Nullable(code.Code),
-		store.Nullable(code.Display), store.Nullable(code.Text), store.Nullable(status), store.Nullable(measuredAt),
-		main.value, store.Nullable(main.valueText), store.Nullable(main.unit),
-		store.Nullable(lastUpdated), store.Nullable(issued), impossible, implausible); err != nil {
-		return err
-	}
-
 	// Components, e.g. the systolic and diastolic parts of a blood pressure.
+	// They are checked before anything is saved, so the flags are final.
+	type component struct {
+		coding fhir.Coding
+		value  obsValue
+	}
+	var comps []component
 	var systolic, diastolic *float64
 	for i, comp := range components {
 		c := fhir.FirstCoding(fhir.Get(comp, "code"))
 		label := fmt.Sprintf("component/%d", i) // same path format as the schema check
 		var v obsValue
-		for _, f := range valueFields {
-			if _, ok := comp.(map[string]any)[f]; ok {
-				if v, err = rec.readValue(comp, f, label+"/"+f); err != nil {
-					return err
-				}
-				break
+		if fields := presentValueFields(comp); len(fields) > 0 {
+			if v, err = rec.readValue(comp, fields[0], label+"/"+fields[0]); err != nil {
+				return err
 			}
 		}
 		if err := check(c.Code, label, v); err != nil {
@@ -237,12 +221,7 @@ func insertObservation(rec *recordCtx) error {
 		case "8462-4":
 			diastolic = v.value
 		}
-		if err := exec(rec, `INSERT INTO observation_components (observation_id, code_system, lab_test_code, name, value, value_text, unit)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			rec.id, store.Nullable(c.System), store.Nullable(c.Code), store.Nullable(c.Name()),
-			v.value, store.Nullable(v.valueText), store.Nullable(v.unit)); err != nil {
-			return err
-		}
+		comps = append(comps, component{c, v})
 	}
 	if systolic != nil && diastolic != nil && *systolic <= *diastolic {
 		impossible = true
@@ -251,8 +230,35 @@ func insertObservation(rec *recordCtx) error {
 			return err
 		}
 	}
-	// Component checks may have changed the flags after the row was inserted.
-	return exec(rec, `UPDATE observations SET is_impossible = ?, is_implausible = ? WHERE id = ?`, impossible, implausible, rec.id)
+
+	if err := rec.l.exec(`INSERT INTO observations (id, raw_resource_id, patient_ref, code_system, lab_test_code, name, label,
+			status, measured_at, value, value_text, unit, last_updated, issued, is_impossible, is_implausible)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rec.id, rec.line, patientRef, code.System, code.Code, code.Display, code.Text, status, measuredAt,
+		main.value, main.valueText, main.unit, lastUpdated, issued, impossible, implausible); err != nil {
+		return err
+	}
+	for _, c := range comps {
+		if err := rec.l.exec(`INSERT INTO observation_components (observation_id, code_system, lab_test_code, name, value, value_text, unit)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			rec.id, c.coding.System, c.coding.Code, c.coding.Name(), c.value.value, c.value.valueText, c.value.unit); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// presentValueFields lists the value[x] fields an observation or component has,
+// in valueFields order.
+func presentValueFields(obj any) []string {
+	m, _ := obj.(map[string]any)
+	var present []string
+	for _, f := range valueFields {
+		if _, ok := m[f]; ok {
+			present = append(present, f)
+		}
+	}
+	return present
 }
 
 // readValue reads one value[x] field from an observation or component.
@@ -311,11 +317,11 @@ func insertCondition(rec *recordCtx) error {
 	}
 	clinical := allowed(fhir.CodeOnly(r["clinicalStatus"]), "active", "recurrence", "relapse", "inactive", "remission", "resolved")
 	verification := allowed(fhir.CodeOnly(r["verificationStatus"]), "unconfirmed", "provisional", "differential", "confirmed", "refuted", "entered-in-error")
-	return exec(rec, `INSERT INTO conditions (id, raw_resource_id, patient_ref, code_system, disease_code, name, label,
+	return rec.l.exec(`INSERT INTO conditions (id, raw_resource_id, patient_ref, code_system, disease_code, name, label,
 			clinical_status, verification_status, onset_date)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.id, rec.line, store.Nullable(patientRef), store.Nullable(code.System), store.Nullable(code.Code),
-		store.Nullable(code.Display), store.Nullable(code.Text), store.Nullable(clinical), store.Nullable(verification), store.Nullable(onset))
+		rec.id, rec.line, patientRef, code.System, code.Code,
+		code.Display, code.Text, clinical, verification, onset)
 }
 
 // ---------- MedicationRequest ----------
@@ -347,12 +353,12 @@ func insertMedication(rec *recordCtx) error {
 	}
 	status := allowed(fhir.Str(r, "status"), "active", "on-hold", "cancelled", "completed", "entered-in-error", "stopped", "draft", "unknown")
 	intent := allowed(fhir.Str(r, "intent"), "proposal", "plan", "order", "original-order", "reflex-order", "filler-order", "instance-order", "option")
-	return exec(rec, `INSERT INTO medications (id, raw_resource_id, patient_ref, code_system, drug_code, name, label,
+	return rec.l.exec(`INSERT INTO medications (id, raw_resource_id, patient_ref, code_system, drug_code, name, label,
 			status, intent, prescribed_at, dosage)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.id, rec.line, store.Nullable(patientRef), store.Nullable(code.System), store.Nullable(code.Code),
-		store.Nullable(code.Display), store.Nullable(code.Text), store.Nullable(status), store.Nullable(intent),
-		store.Nullable(prescribedAt), store.Nullable(strings.Join(dosage, "; ")))
+		rec.id, rec.line, patientRef, code.System, code.Code,
+		code.Display, code.Text, status, intent,
+		prescribedAt, strings.Join(dosage, "; "))
 }
 
 // ---------- Procedure ----------
@@ -367,20 +373,15 @@ func insertProcedure(rec *recordCtx) error {
 	if err != nil {
 		return err
 	}
-	performedAt, err := rec.date("performedDateTime")
+	performedAt, err := rec.dateOrStart("performedDateTime", "performedPeriod")
 	if err != nil {
 		return err
 	}
-	if performedAt == "" {
-		if performedAt, err = rec.date("performedPeriod", "start"); err != nil {
-			return err
-		}
-	}
 	performer := fhir.Str(r, "performer", 0, "actor", "reference")
 	status := allowed(fhir.Str(r, "status"), "preparation", "in-progress", "not-done", "on-hold", "stopped", "completed", "entered-in-error", "unknown")
-	return exec(rec, `INSERT INTO procedures (id, raw_resource_id, patient_ref, code_system, procedure_code, name, label,
+	return rec.l.exec(`INSERT INTO procedures (id, raw_resource_id, patient_ref, code_system, procedure_code, name, label,
 			status, performed_at, performer)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.id, rec.line, store.Nullable(patientRef), store.Nullable(code.System), store.Nullable(code.Code),
-		store.Nullable(code.Display), store.Nullable(code.Text), store.Nullable(status), store.Nullable(performedAt), store.Nullable(performer))
+		rec.id, rec.line, patientRef, code.System, code.Code,
+		code.Display, code.Text, status, performedAt, performer)
 }

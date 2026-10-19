@@ -179,10 +179,10 @@ func TestScenarioBulk(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	schema, _ := validate.NewSchema()
+	schema, _ := validate.NewSchema(SupportedTypes())
 	ranges, _ := validate.LoadRanges("")
 	start := time.Now()
-	sum, err := Load(context.Background(), db, &buf, schema, Config{MaxBinaryBytes: 5 << 20, MaxRecordBytes: 10 << 20, Ranges: ranges})
+	sum, err := Load(context.Background(), db, &buf, schema, Config{MaxBinaryBytes: 5_000_000, MaxRecordBytes: 10_000_000, Ranges: ranges})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,5 +235,24 @@ func TestNameKey(t *testing.T) {
 		if got := nameKey(c[0]); got != c[1] {
 			t.Errorf("nameKey(%q) = %q, want %q", c[0], got, c[1])
 		}
+	}
+}
+
+func TestNewestCorrection(t *testing.T) {
+	a := obsRow{id: "a", lastUpdated: "2024-01-01"}
+	b := obsRow{id: "b", lastUpdated: "2024-01-01"}
+	c := obsRow{id: "c", lastUpdated: "2024-02-01"}
+	// An earlier tie must not stop a later, newer record from winning.
+	if got, ok := newest([]obsRow{a, b, c}); got.id != "c" || !ok {
+		t.Errorf("want c, decided; got %s, %v", got.id, ok)
+	}
+	// A tie for newest can't be decided: lowest id, not decided.
+	if got, ok := newest([]obsRow{c, b, a}[1:]); got.id != "a" || ok {
+		t.Errorf("want a, undecided; got %s, %v", got.id, ok)
+	}
+	// issued breaks the tie when lastUpdated can't.
+	a.issued, b.issued = "2024-01-02", "2024-01-03"
+	if got, ok := newest([]obsRow{a, b}); got.id != "b" || !ok {
+		t.Errorf("want b, decided; got %s, %v", got.id, ok)
 	}
 }

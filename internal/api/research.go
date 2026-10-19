@@ -254,23 +254,6 @@ const (
 		AND (pr.procedure_code = ? OR lower(pr.name) LIKE ? OR lower(pr.label) LIKE ?)`
 )
 
-// duplicateGroups finds possible duplicate patients within a list of ids.
-// It returns, for each id, the other ids in the list that may be the same
-// person, and how many ids are extra (beyond the first in each group), so
-// len(ids) - extra is the count without possible duplicates.
-func (s *Server) duplicateGroups(ids []string) (dupOf map[string][]string, extra int, err error) {
-	dupOf, err = s.possibleDuplicates(ids)
-	if err != nil {
-		return nil, 0, err
-	}
-	for _, id := range ids {
-		if isExtraDuplicate(id, dupOf) {
-			extra++
-		}
-	}
-	return dupOf, extra, nil
-}
-
 // cell hides a count below the minimum cell size, so a small group can't
 // single someone out.
 func (s *Server) cell(n int) any {
@@ -280,14 +263,18 @@ func (s *Server) cell(n int) any {
 	return n
 }
 
-// possibleDuplicates returns, for each person id in the list, the other
-// person ids that may be the same person: the same normalized name and birth
-// date, or the same SSN with a different name or birth date (a conflict).
-// People confirmed by SSN already share one person id, so they never appear here.
-func (s *Server) possibleDuplicates(ids []string) (map[string][]string, error) {
-	out := map[string][]string{}
+// duplicateGroups finds possible duplicates within a list of person ids: the
+// same normalized name and birth date, or the same SSN with a different name or
+// birth date (a conflict). People confirmed by SSN already share one person id,
+// so they never appear here.
+//
+// dupOf lists, for each id, the other ids in the list that may be the same
+// person. extra is how many ids are extra (beyond the first in each group), so
+// len(ids) - extra is the count without possible duplicates.
+func (s *Server) duplicateGroups(ids []string) (dupOf map[string][]string, extra int, err error) {
+	dupOf = map[string][]string{}
 	if len(ids) < 2 {
-		return out, nil
+		return dupOf, 0, nil
 	}
 	in := map[string]bool{}
 	for _, id := range ids {
@@ -298,19 +285,27 @@ func (s *Server) possibleDuplicates(ids []string) (map[string][]string, error) {
 			(a.name_key = b.name_key AND a.birth_date = b.birth_date) OR a.ssn_hash = b.ssn_hash)
 		ORDER BY 1, 2`)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var a, b string
 		if err := rows.Scan(&a, &b); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if in[a] && in[b] {
-			out[a] = append(out[a], b)
+			dupOf[a] = append(dupOf[a], b)
 		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	for _, id := range ids {
+		if isExtraDuplicate(id, dupOf) {
+			extra++
+		}
+	}
+	return dupOf, extra, nil
 }
 
 func (s *Server) latestLabs(code string) (map[string]latestLab, error) {

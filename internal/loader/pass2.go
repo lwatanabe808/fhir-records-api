@@ -3,6 +3,7 @@ package loader
 import (
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -16,7 +17,8 @@ func (l *Loader) secondPass() error {
 		l.checkLifeDates,
 		l.checkAttachments,
 		l.groupObservations,
-		l.findDuplicatePatients,
+		l.matchBySSN,
+		l.flagSameNameAndBirth,
 	}
 	for _, step := range steps {
 		if err := step(); err != nil {
@@ -43,20 +45,28 @@ var linkedTables = []struct{ table, resourceType string }{
 //     (the FHIR spec says ids are case-insensitive)
 //   - anything else: left unlinked and flagged. We never guess.
 func (l *Loader) linkPatients() error {
-	ids, err := l.patientIDs()
+	// Patient ids grouped by their lowercase form: "p1" → ["P1", "p1"].
+	byLower := map[string][]string{}
+	rows, err := l.tx.Query(`SELECT id FROM patients`)
 	if err != nil {
 		return err
 	}
-	byLower := map[string][]string{}
-	for id := range ids {
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
 		byLower[strings.ToLower(id)] = append(byLower[strings.ToLower(id)], id)
 	}
+	rows.Close()
+
 	resolve := func(ref string) (id string, caseMismatch bool, detail string) {
 		_, target, _ := fhir.ParseRef(ref)
-		if ids[target] {
+		matches := byLower[strings.ToLower(target)]
+		if slices.Contains(matches, target) {
 			return target, false, ""
 		}
-		matches := byLower[strings.ToLower(target)]
 		switch len(matches) {
 		case 1:
 			return matches[0], true, ""
@@ -113,7 +123,7 @@ func (l *Loader) linkPatients() error {
 
 	// Raw records (including unsupported types) get the same links, without issues,
 	// so /patients/{id}/records can find them.
-	rows, err := l.tx.Query(`SELECT id, patient_ref FROM raw_resources WHERE patient_ref IS NOT NULL`)
+	rows, err = l.tx.Query(`SELECT id, patient_ref FROM raw_resources WHERE patient_ref IS NOT NULL`)
 	if err != nil {
 		return err
 	}
@@ -138,31 +148,12 @@ func (l *Loader) linkPatients() error {
 	return nil
 }
 
-func (l *Loader) patientIDs() (map[string]bool, error) {
-	rows, err := l.tx.Query(`SELECT id FROM patients`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	ids := map[string]bool{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids[id] = true
-	}
-	return ids, rows.Err()
-}
-
 // checkLifeDates flags measurements dated before the patient was born or after they died.
 func (l *Loader) checkLifeDates() error {
 	// Dates are compared only to the precision of the patient's date, so a
 	// birth date of "1971" compares against the year of the measurement.
 	rows, err := l.tx.Query(`SELECT o.id, o.raw_resource_id, o.measured_at,
-			CASE WHEN p.birth_date IS NOT NULL AND substr(o.measured_at, 1, length(p.birth_date)) < p.birth_date
-			     THEN 'before the patient''s birth date ' || p.birth_date
-			     ELSE 'after the patient''s date of death ' || p.deceased_date END
+			substr(o.measured_at, 1, length(p.birth_date)) < p.birth_date AS before_birth, p.birth_date, p.deceased_date
 		FROM observations o JOIN patients p ON p.id = o.patient_id
 		WHERE o.measured_at IS NOT NULL AND (
 			(p.birth_date IS NOT NULL AND substr(o.measured_at, 1, length(p.birth_date)) < p.birth_date) OR
@@ -172,11 +163,17 @@ func (l *Loader) checkLifeDates() error {
 	}
 	var found []Issue
 	for rows.Next() {
-		var id, measured, reason string
+		var id, measured string
 		var raw int64
-		if err := rows.Scan(&id, &raw, &measured, &reason); err != nil {
+		var beforeBirth sql.NullBool
+		var birth, death sql.NullString
+		if err := rows.Scan(&id, &raw, &measured, &beforeBirth, &birth, &death); err != nil {
 			rows.Close()
 			return err
+		}
+		reason := "after the patient's date of death " + death.String
+		if beforeBirth.Bool {
+			reason = "before the patient's birth date " + birth.String
 		}
 		found = append(found, Issue{RawResourceID: raw, RecordType: "Observation", RecordID: id, Type: ImpossibleValue, Severity: Error,
 			Field: "effectiveDateTime", Detail: fmt.Sprintf("measured %s, %s", measured, reason),
@@ -187,11 +184,8 @@ func (l *Loader) checkLifeDates() error {
 		if _, err := l.tx.Exec(`UPDATE observations SET is_impossible = 1 WHERE id = ?`, i.RecordID); err != nil {
 			return err
 		}
-		if err := l.addIssue(i); err != nil {
-			return err
-		}
 	}
-	return nil
+	return l.addIssues(found)
 }
 
 // ---------- Attachments ----------
@@ -257,13 +251,7 @@ func (l *Loader) checkAttachments() error {
 			Detail: "no DocumentReference links to this Binary, so its patient is unknown", ActionTaken: "kept, not shown on any chart"})
 	}
 	rows.Close()
-
-	for _, i := range found {
-		if err := l.addIssue(i); err != nil {
-			return err
-		}
-	}
-	return nil
+	return l.addIssues(found)
 }
 
 // ---------- Duplicate and corrected observations ----------
@@ -280,7 +268,7 @@ type obsRow struct {
 //   - Otherwise the lowest id is primary and the others are hidden by default (DUPLICATE_RECORD).
 func (l *Loader) groupObservations() error {
 	rows, err := l.tx.Query(`SELECT o.id, coalesce(o.status, ''), coalesce(o.last_updated, ''), coalesce(o.issued, ''), o.raw_resource_id,
-			coalesce(o.patient_id, '') || '|' || coalesce(o.code_system, '') || '|' || o.lab_test_code || '|' || o.measured_at AS grp,
+			o.patient_id || '|' || coalesce(o.code_system, '') || '|' || o.lab_test_code || '|' || o.measured_at AS grp,
 			coalesce(o.value, '') || '|' || coalesce(o.value_text, '') || '|' || coalesce(o.unit, '') || '|' ||
 			coalesce((SELECT group_concat(coalesce(c.lab_test_code, '') || '=' || coalesce(c.value, '') || coalesce(c.unit, ''), ',')
 			          FROM observation_components c WHERE c.observation_id = o.id), '')
@@ -348,7 +336,7 @@ func (l *Loader) resolveGroup(groupKey string, members []obsRow) error {
 				return err
 			}
 		}
-		if decided || len(amended) == 1 {
+		if decided {
 			return nil
 		}
 		// Several corrections and no way to tell which is newest: treat them as duplicates.
@@ -378,49 +366,50 @@ func (l *Loader) resolveGroup(groupKey string, members []obsRow) error {
 				return err
 			}
 		}
-		var others []string
-		for _, id := range ids {
-			if id != m.id {
-				others = append(others, id)
-			}
-		}
 		if err := l.addIssue(Issue{RawResourceID: m.raw, RecordType: "Observation", RecordID: m.id, Type: DuplicateRecord, GroupKey: groupKey,
-			Severity: severity, Detail: detail + strings.Join(others, ", "), ActionTaken: action}); err != nil {
+			Severity: severity, Detail: detail + others(ids, m.id), ActionTaken: action}); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// newest picks the latest record by meta.lastUpdated, then issued.
-// decided is false when the timestamps can't tell them apart.
-func newest(rows []obsRow) (obsRow, bool) {
+// newest picks the latest record by meta.lastUpdated, or by issued when that
+// can't decide. decided is false when neither can, and then the lowest id is returned.
+func newest(rows []obsRow) (winner obsRow, decided bool) {
 	if len(rows) == 1 {
 		return rows[0], true
 	}
-	for _, field := range []func(obsRow) string{
-		func(r obsRow) string { return r.lastUpdated },
-		func(r obsRow) string { return r.issued },
-	} {
-		best, unique := rows[0], true
-		for _, r := range rows[1:] {
-			if field(r) == "" || field(best) == "" {
-				unique = false
-				break
-			}
-			if field(r) > field(best) {
-				best = r
-			} else if field(r) == field(best) {
-				unique = false
-			}
-		}
-		if unique {
-			return best, true
+	if r, ok := latestBy(rows, func(r obsRow) string { return r.lastUpdated }); ok {
+		return r, true
+	}
+	if r, ok := latestBy(rows, func(r obsRow) string { return r.issued }); ok {
+		return r, true
+	}
+	lowest := rows[0]
+	for _, r := range rows {
+		if r.id < lowest.id {
+			lowest = r
 		}
 	}
-	sorted := append([]obsRow(nil), rows...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].id < sorted[j].id })
-	return sorted[0], false
+	return lowest, false
+}
+
+// latestBy returns the row with the latest value of field. ok is false when a
+// row has no value, or when two rows share the latest value.
+func latestBy(rows []obsRow, field func(obsRow) string) (latest obsRow, ok bool) {
+	tied := false
+	for i, r := range rows {
+		switch {
+		case field(r) == "":
+			return obsRow{}, false
+		case i == 0 || field(r) > field(latest):
+			latest, tied = r, false
+		case field(r) == field(latest):
+			tied = true
+		}
+	}
+	return latest, !tied
 }
 
 // ---------- Matching people ----------
@@ -430,7 +419,7 @@ type patientRow struct {
 	raw                int64
 }
 
-// findDuplicatePatients decides which patient records belong to the same person.
+// Patient records that belong to the same person:
 //
 //   - Same valid SSN, and the same name and birth date: the same person.
 //     They share a person_id, so the patient chart combines them. The rows
@@ -440,13 +429,8 @@ type patientRow struct {
 //     once in research, where overcounting is the bigger risk.
 //   - Same name and birth date only: a possible duplicate. Kept apart on the
 //     chart, counted once in research.
-func (l *Loader) findDuplicatePatients() error {
-	if err := l.matchBySSN(); err != nil {
-		return err
-	}
-	return l.flagSameNameAndBirth()
-}
 
+// matchBySSN handles the first two cases.
 func (l *Loader) matchBySSN() error {
 	rows, err := l.tx.Query(`SELECT ssn_hash, id, raw_resource_id, coalesce(name_key, ''), coalesce(birth_date, '')
 		FROM patients WHERE ssn_hash IN (SELECT ssn_hash FROM patients WHERE ssn_hash IS NOT NULL GROUP BY ssn_hash HAVING COUNT(*) > 1)
@@ -482,23 +466,17 @@ func (l *Loader) matchBySSN() error {
 			}
 		}
 		for _, m := range members {
-			var others []string
-			for _, id := range ids {
-				if id != m.id {
-					others = append(others, id)
-				}
-			}
 			issue := Issue{RawResourceID: m.raw, RecordType: "Patient", RecordID: m.id, Field: "identifier", GroupKey: "person:" + person}
 			if agree {
 				if _, err := l.tx.Exec(`UPDATE patients SET person_id = ? WHERE id = ?`, person, m.id); err != nil {
 					return err
 				}
 				issue.Type, issue.Severity = SamePersonBySSN, Info
-				issue.Detail = "same SSN, name and birth date as " + strings.Join(others, ", ")
+				issue.Detail = "same SSN, name and birth date as " + others(ids, m.id)
 				issue.ActionTaken = "combined on the patient chart as person " + person + ", counted once in research"
 			} else {
 				issue.Type, issue.Severity = SSNConflict, Warning
-				issue.Detail = "shares an SSN with " + strings.Join(others, ", ") + ", but the name or birth date differ"
+				issue.Detail = "shares an SSN with " + others(ids, m.id) + ", but the name or birth date differ"
 				issue.ActionTaken = "kept separate on the chart, counted once in research"
 			}
 			if err := l.addIssue(issue); err != nil {
@@ -509,7 +487,7 @@ func (l *Loader) matchBySSN() error {
 	return nil
 }
 
-// flagSameNameAndBirth flags patients with the same normalized name and birth
+// flagSameNameAndBirth handles the third case: it flags patients with the same normalized name and birth
 // date who aren't already confirmed as the same person.
 func (l *Loader) flagSameNameAndBirth() error {
 	rows, err := l.tx.Query(`SELECT p.id, p.raw_resource_id, p.full_name, p.birth_date,
@@ -536,10 +514,16 @@ func (l *Loader) flagSameNameAndBirth() error {
 		}
 	}
 	rows.Close()
-	for _, i := range found {
-		if err := l.addIssue(i); err != nil {
-			return err
+	return l.addIssues(found)
+}
+
+// others lists every id except self, for issue details like "also appears as a, b".
+func others(ids []string, self string) string {
+	var out []string
+	for _, id := range ids {
+		if id != self {
+			out = append(out, id)
 		}
 	}
-	return nil
+	return strings.Join(out, ", ")
 }
