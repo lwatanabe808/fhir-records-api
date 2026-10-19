@@ -36,7 +36,10 @@ type Config struct {
 	MaxBinaryBytes int             // decoded Binary data over this size is not stored
 	MaxRecordBytes int             // non-Binary lines over this size are not processed
 	Ranges         validate.Ranges // plausible ranges per lab test code
-	Now            func() time.Time
+	// IdentifierSecret is the key for hashing SSNs, so the database never
+	// holds the number and nobody without the key can rebuild it.
+	IdentifierSecret []byte
+	Now              func() time.Time
 }
 
 // Summary is what the loader reports when it finishes.

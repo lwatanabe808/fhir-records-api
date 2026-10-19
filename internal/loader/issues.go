@@ -50,6 +50,9 @@ const (
 	DuplicateRecord          = "DUPLICATE_RECORD"
 	Superseded               = "SUPERSEDED"
 	PossibleDuplicatePatient = "POSSIBLE_DUPLICATE_PATIENT"
+	SamePersonBySSN          = "SAME_PERSON_BY_SSN"
+	SSNConflict              = "SSN_CONFLICT"
+	InvalidSSN               = "INVALID_SSN"
 )
 
 // Severity levels.

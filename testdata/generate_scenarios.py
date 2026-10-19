@@ -228,6 +228,39 @@ write("11-values.jsonl", [
     obs("ob-1110", "pt-1100", A1C, "2025-01-11T08:00:00Z", 6.0, "%", status="cancelled"),
 ])
 
+# 13. Identifiers: matching people by Social Security number.
+#     Expect: same SSN plus same name and birth date = one person (combined chart);
+#     same SSN but a different birth date = conflict (separate chart, counted once
+#     in research); placeholder and partial SSNs are ignored; names are compared
+#     ignoring case, accents and punctuation.
+def ssn_patient(pid, given, family, birth, ssn=None, gender="female"):
+    p = patient(pid, given, family, birth, gender=gender)
+    if ssn is not None:
+        p["identifier"] = [{"system": "http://hl7.org/fhir/sid/us-ssn", "value": ssn},
+                           {"system": "http://hospital.example.org/mrn", "value": "MRN-" + pid}]
+    return p
+
+
+write("13-identifiers.jsonl", [
+    ssn_patient("id-a1", ["María"], "García", "1975-03-02", "234-56-7890"),
+    ssn_patient("id-a2", ["MARIA"], "GARCIA", "1975-03-02", "234567890"),        # same person, other clinic
+    obs("id-a1-ob", "id-a1", A1C, "2024-01-01T08:00:00Z", 6.8, "%"),
+    obs("id-a2-ob", "id-a2", A1C, "2025-01-01T08:00:00Z", 7.3, "%"),             # latest A1c for this person
+    {"resourceType": "Condition", "id": "id-a2-co", "clinicalStatus": {"coding": [{"code": "active"}]},
+     "verificationStatus": {"coding": [{"code": "confirmed"}]}, "code": DIABETES,
+     "subject": {"reference": "Patient/id-a2"}, "onsetDateTime": "2015"},
+    ssn_patient("id-c1", ["John"], "Smith", "1960-01-01", "345-67-8901", gender="male"),
+    ssn_patient("id-c2", ["John"], "Smith", "1961-01-01", "345-67-8901", gender="male"),  # same SSN, different birth date
+    obs("id-c2-ob", "id-c2", A1C, "2025-02-01T08:00:00Z", 9.1, "%"),
+    ssn_patient("id-e1", ["Pat"], "One", "1980-01-01", "000-00-0000"),           # placeholder SSN
+    ssn_patient("id-e2", ["Sam"], "Two", "1981-01-01", "000-00-0000"),           # same placeholder, different person
+    ssn_patient("id-f", ["Lee"], "Four", "1982-01-01", "1234"),                  # last 4 digits only
+    ssn_patient("id-g", ["Kim"], "Fake", "1983-01-01", "123-45-6789"),           # well-known fake number
+    ssn_patient("id-h1", ["Zoë"], "O'Brien", "1990-09-09"),                     # no SSN
+    ssn_patient("id-h2", ["ZOE"], "O BRIEN", "1990-09-09"),                     # same name ignoring accents and punctuation
+    ssn_patient("id-u", ["Una"], "Unique", "1970-07-07", "456-78-9012"),         # valid SSN, nobody else shares it
+])
+
 # 12. Many records, to check speed. 2,000 patients, 20,000 observations.
 records = []
 for i in range(2000):

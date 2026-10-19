@@ -423,16 +423,100 @@ func newest(rows []obsRow) (obsRow, bool) {
 	return sorted[0], false
 }
 
-// ---------- Duplicate patients ----------
+// ---------- Matching people ----------
 
-// findDuplicatePatients flags patients with the same name and birth date.
-// They are never merged: mixing two people's records is worse than a duplicate.
+type patientRow struct {
+	id, nameKey, birth string
+	raw                int64
+}
+
+// findDuplicatePatients decides which patient records belong to the same person.
+//
+//   - Same valid SSN, and the same name and birth date: the same person.
+//     They share a person_id, so the patient chart combines them. The rows
+//     are never merged, so a wrong match can be undone.
+//   - Same SSN, but the name or birth date differ: a conflict. Kept apart on
+//     the chart (a wrong guess would show a stranger's records), but counted
+//     once in research, where overcounting is the bigger risk.
+//   - Same name and birth date only: a possible duplicate. Kept apart on the
+//     chart, counted once in research.
 func (l *Loader) findDuplicatePatients() error {
+	if err := l.matchBySSN(); err != nil {
+		return err
+	}
+	return l.flagSameNameAndBirth()
+}
+
+func (l *Loader) matchBySSN() error {
+	rows, err := l.tx.Query(`SELECT ssn_hash, id, raw_resource_id, coalesce(name_key, ''), coalesce(birth_date, '')
+		FROM patients WHERE ssn_hash IN (SELECT ssn_hash FROM patients WHERE ssn_hash IS NOT NULL GROUP BY ssn_hash HAVING COUNT(*) > 1)
+		ORDER BY ssn_hash, id`)
+	if err != nil {
+		return err
+	}
+	groups := map[string][]patientRow{}
+	var order []string
+	for rows.Next() {
+		var hash string
+		var p patientRow
+		if err := rows.Scan(&hash, &p.id, &p.raw, &p.nameKey, &p.birth); err != nil {
+			rows.Close()
+			return err
+		}
+		if _, ok := groups[hash]; !ok {
+			order = append(order, hash)
+		}
+		groups[hash] = append(groups[hash], p)
+	}
+	rows.Close()
+
+	for _, hash := range order {
+		members := groups[hash]
+		person := members[0].id // lowest id, since rows are sorted
+		agree := true
+		var ids []string
+		for _, m := range members {
+			ids = append(ids, m.id)
+			if m.nameKey == "" || m.birth == "" || m.nameKey != members[0].nameKey || m.birth != members[0].birth {
+				agree = false
+			}
+		}
+		for _, m := range members {
+			var others []string
+			for _, id := range ids {
+				if id != m.id {
+					others = append(others, id)
+				}
+			}
+			issue := Issue{RawResourceID: m.raw, RecordType: "Patient", RecordID: m.id, Field: "identifier", GroupKey: "person:" + person}
+			if agree {
+				if _, err := l.tx.Exec(`UPDATE patients SET person_id = ? WHERE id = ?`, person, m.id); err != nil {
+					return err
+				}
+				issue.Type, issue.Severity = SamePersonBySSN, Info
+				issue.Detail = "same SSN, name and birth date as " + strings.Join(others, ", ")
+				issue.ActionTaken = "combined on the patient chart as person " + person + ", counted once in research"
+			} else {
+				issue.Type, issue.Severity = SSNConflict, Warning
+				issue.Detail = "shares an SSN with " + strings.Join(others, ", ") + ", but the name or birth date differ"
+				issue.ActionTaken = "kept separate on the chart, counted once in research"
+			}
+			if err := l.addIssue(issue); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// flagSameNameAndBirth flags patients with the same normalized name and birth
+// date who aren't already confirmed as the same person.
+func (l *Loader) flagSameNameAndBirth() error {
 	rows, err := l.tx.Query(`SELECT p.id, p.raw_resource_id, p.full_name, p.birth_date,
 			(SELECT group_concat(q.id, ', ') FROM patients q
-			 WHERE lower(q.full_name) = lower(p.full_name) AND q.birth_date = p.birth_date AND q.id <> p.id)
+			 WHERE q.name_key = p.name_key AND q.birth_date = p.birth_date AND q.person_id <> p.person_id)
 		FROM patients p
-		WHERE p.full_name IS NOT NULL AND p.birth_date IS NOT NULL`)
+		WHERE p.name_key IS NOT NULL AND p.birth_date IS NOT NULL ORDER BY p.id`)
 	if err != nil {
 		return err
 	}
@@ -447,7 +531,8 @@ func (l *Loader) findDuplicatePatients() error {
 		}
 		if others.Valid {
 			found = append(found, Issue{RawResourceID: raw, RecordType: "Patient", RecordID: id, Type: PossibleDuplicatePatient,
-				Severity: Warning, Detail: fmt.Sprintf("%s, born %s, also appears as %s", name, birth, others.String), ActionTaken: "kept both, never merged"})
+				Severity: Warning, Detail: fmt.Sprintf("%s, born %s, also appears as %s", name, birth, others.String),
+				ActionTaken: "kept separate on the chart, counted once in research"})
 		}
 	}
 	rows.Close()

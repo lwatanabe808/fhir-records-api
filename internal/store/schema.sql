@@ -25,8 +25,14 @@ CREATE TABLE patients (
   gender          TEXT,
   birth_date      TEXT,
   deceased_date   TEXT,
-  active          INTEGER
+  active          INTEGER,
+  name_key        TEXT,     -- normalized name, for matching
+  ssn_hash        TEXT,     -- keyed hash of a valid SSN; the number itself is never stored here
+  person_id       TEXT      -- patients confirmed as the same person share this (set in pass 2)
 );
+CREATE INDEX idx_patient_ssn ON patients(ssn_hash);
+CREATE INDEX idx_patient_person ON patients(person_id);
+CREATE INDEX idx_patient_name_birth ON patients(name_key, birth_date);
 CREATE INDEX idx_patient_birth ON patients(birth_date);
 CREATE INDEX idx_patient_family ON patients(family_name, given_names);
 

@@ -53,6 +53,7 @@ make test
 | `MAX_BINARY_MB` | `5` | Decoded attachments over this size are not stored |
 | `MAX_RECORD_MB` | `10` | Non-Binary lines over this size are not processed |
 | `RESEARCH_ID_SECRET` | dev default | Key for the de-identified research ids. Set it in any real environment. |
+| `IDENTIFIER_SECRET` | dev default | Key used to hash Social Security numbers before they are stored. Set it in any real environment. |
 | `MIN_CELL_SIZE` | `5` | Research counts below this show as `<5` (condition counts, lab summaries, dataset profile). The sample has only 16 patients, so most groups are hidden; use `MIN_CELL_SIZE=1` to see every number in a demo. |
 | `PLAUSIBLE_RANGES_FILE` | built in | JSON file of plausible ranges per lab test |
 
@@ -224,7 +225,10 @@ Each case below is covered by a test in [internal/loader/loader_test.go](interna
 | 40 | Different ids, same patient, test and exact time, different values | Pass 2 | Lowest id is primary, others hidden | `DUPLICATE_RECORD` | warning |
 | 41 | Same as 40, same values | Pass 2 | Lowest id is primary, others hidden | `DUPLICATE_RECORD` | info |
 | 42 | Amended or corrected reading | Pass 2 | Replaces the original (`replaced_by`) | `SUPERSEDED` | info |
-| 43 | Same name and birth date, different patient ids | Pass 2 | Both kept, never merged | `POSSIBLE_DUPLICATE_PATIENT` | warning |
+| 43 | Same name and birth date (ignoring case, accents and punctuation), different patient ids | Pass 2 | Separate charts, counted once in research | `POSSIBLE_DUPLICATE_PATIENT` | warning |
+| 43a | Same SSN, and name and birth date agree | Pass 2 | Combined into one chart (shared `person_id`), counted once | `SAME_PERSON_BY_SSN` | info |
+| 43b | Same SSN, but name or birth date disagree | Pass 2 | Separate charts, counted once in research | `SSN_CONFLICT` | warning |
+| 43c | SSN is a placeholder, fake, partial (last 4) or not 9 digits | Pass 1 | Not used for matching | `INVALID_SSN` | warning |
 
 **Valid records with special handling (no issue logged):**
 
@@ -253,6 +257,7 @@ Besides the sample file, [testdata/scenarios](testdata/scenarios) has input file
 | `09-two-clinics` | Same person from two clinics, repeated and corrected records, `meta.lastUpdated` | Patients never merged, newest version kept |
 | `10-attachments` | PDF, HTML, inline data, a Binary shared by two notes, an image labeled as text | Each stored with the right type and text |
 | `11-values` | Other units, zero, negative, huge, wrong types, `dataAbsentReason` | Impossible hidden, implausible flagged |
+| `13-identifiers` | Same SSN across clinics, SSN conflict, placeholder, partial and fake SSNs, accented names | One combined chart, one conflict, SSNs never returned |
 | `12-bulk` | 22,000 records (built by `make scenarios`, not kept in git) | Loads in about 3 seconds |
 
 ## Key decisions and tradeoffs
@@ -263,6 +268,16 @@ Besides the sample file, [testdata/scenarios](testdata/scenarios) has input file
 - **The official FHIR schema, plus my own checks.** The schema catches format problems in one step, including ones I didn't think of. But it can't see links between records, and it allows several things FHIR says are wrong (empty lists, any string as base64, a missing Binary content type, a plain string as a patient link), so those are my own checks.
 - **Never guess a patient.** Linking by name, or attaching `Patient/nwyle` to Noah, risks putting health data on the wrong person. An unlinked record is visible and fixable; a wrong link is invisible.
 - **Capital letters are the one exception,** because the FHIR spec says ids are case-insensitive. Even then it only links when exactly one patient matches.
+- **Matching people across clinics.** The patient chart and research counts treat the same evidence differently on purpose:
+
+  | Evidence | Patient chart | Research count |
+  |---|---|---|
+  | Same SSN, and name and birth date agree | Combined | Once |
+  | Same SSN, but name or birth date disagree | Separate, `SSN_CONFLICT` | Once (possible duplicate) |
+  | Same name and birth date only | Separate, `POSSIBLE_DUPLICATE_PATIENT` | Once (possible duplicate) |
+
+  The chart only combines on strong evidence, because a wrong merge shows one person's health data to another. Research counts lean the other way, so a person is never counted twice. Every count shows `countWithoutDuplicates`, `countIncludingPossibleDuplicates` and `possibleDuplicatePatients`, and `/patients/{id}` lists `linkedPatientIds`.
+- **SSNs are never stored or returned.** The loader keeps only a keyed hash (HMAC with `IDENTIFIER_SECRET`) for matching. The original record is kept as received, so every endpoint that returns raw JSON replaces the SSN with `[redacted]`.
 - **Duplicates are flagged, never deleted.** The clean view shows one primary record with a warning, and the others are one parameter away.
 - **Medical meaning is not judged.** The API checks structure and consistency. Whether a label like "History of MI" fits an active status, or whether a code and its label describe the same thing, needs clinical judgment.
 - **Plausible ranges are placeholders.** They are deliberately wide limits meant to catch typos, not medical judgments, and they live in a config file so a clinician can correct them.

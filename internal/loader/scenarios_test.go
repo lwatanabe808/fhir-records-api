@@ -193,3 +193,47 @@ func TestScenarioBulk(t *testing.T) {
 		t.Errorf("loading 22,000 records took %s", took)
 	}
 }
+
+func TestScenarioIdentifiers(t *testing.T) {
+	db, _ := scenario(t, "13-identifiers.jsonl")
+	// Same SSN, same name (ignoring case and accents) and birth date: one person.
+	wantIssue(t, db, "id-a1", SamePersonBySSN)
+	wantIssue(t, db, "id-a2", SamePersonBySSN)
+	wantValue(t, db, `SELECT person_id FROM patients WHERE id = 'id-a2'`, "id-a1")
+	// Same SSN, different birth date: a conflict, never combined.
+	wantIssue(t, db, "id-c1", SSNConflict)
+	wantValue(t, db, `SELECT person_id FROM patients WHERE id = 'id-c2'`, "id-c2")
+	// Placeholder, partial and fake numbers are never used.
+	for _, id := range []string{"id-e1", "id-e2", "id-f", "id-g"} {
+		wantIssue(t, db, id, InvalidSSN)
+		wantValue(t, db, `SELECT ssn_hash FROM patients WHERE id = '`+id+`'`, "NULL")
+	}
+	if got := issueTypes(t, db, "id-e1"); slices.Contains(got, SSNConflict) || slices.Contains(got, SamePersonBySSN) {
+		t.Errorf("a placeholder SSN must not link people: %v", got)
+	}
+	// Names compared ignoring accents and punctuation.
+	wantIssue(t, db, "id-h1", PossibleDuplicatePatient)
+	// A unique valid SSN raises nothing.
+	if got := issueTypes(t, db, "id-u"); len(got) != 0 {
+		t.Errorf("id-u: want no issues, got %v", got)
+	}
+	// The SSN itself is never stored in the clean tables or issue text.
+	for _, q := range []string{
+		`SELECT COUNT(*) FROM patients WHERE ssn_hash LIKE '%234567890%' OR full_name LIKE '%2345%'`,
+		`SELECT COUNT(*) FROM issues WHERE detail LIKE '%2345%' OR detail LIKE '%3456%'`,
+	} {
+		wantValue(t, db, q, "0")
+	}
+}
+
+func TestNameKey(t *testing.T) {
+	for _, c := range [][2]string{
+		{"María García", "maria garcia"},
+		{"ZOË  O'Brien", "zoe o brien"},
+		{"Mary-Jane Watson", "mary jane watson"},
+	} {
+		if got := nameKey(c[0]); got != c[1] {
+			t.Errorf("nameKey(%q) = %q, want %q", c[0], got, c[1])
+		}
+	}
+}

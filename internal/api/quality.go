@@ -153,7 +153,7 @@ func (s *Server) listIssues(w http.ResponseWriter, r *http.Request) {
 		}
 		if includeRaw && raw.Valid {
 			if json.Valid([]byte(raw.String)) {
-				item["raw"] = json.RawMessage(raw.String)
+				item["raw"] = json.RawMessage(redactRaw(raw.String))
 			} else {
 				item["raw"] = raw.String
 			}
@@ -180,7 +180,7 @@ func (s *Server) rawRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/fhir+json")
-	_, _ = w.Write([]byte(raw))
+	_, _ = w.Write([]byte(redactRaw(raw)))
 }
 
 // ---------- GET /fhir/{type}/{id}/history ----------
@@ -228,7 +228,7 @@ func (s *Server) rawRecordHistory(w http.ResponseWriter, r *http.Request) {
 
 	out := []map[string]any{}
 	for i, v := range versions {
-		item := map[string]any{"version": i + 1, "line": v.line, "resource": json.RawMessage(v.raw)}
+		item := map[string]any{"version": i + 1, "line": v.line, "resource": json.RawMessage(redactRaw(v.raw))}
 		switch {
 		case currentLine.Valid && v.line == currentLine.Int64:
 			item["status"] = "current"

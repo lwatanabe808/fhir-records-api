@@ -26,6 +26,10 @@ func main() {
 	maxRecordMB := envInt("MAX_RECORD_MB", 10)
 	minCellSize := envInt("MIN_CELL_SIZE", 5)
 	secret := env("RESEARCH_ID_SECRET", "dev-only-secret-change-me")
+	identifierSecret := env("IDENTIFIER_SECRET", "dev-only-identifier-secret-change-me")
+	if identifierSecret == "dev-only-identifier-secret-change-me" {
+		log.Println("warning: IDENTIFIER_SECRET is not set, using the development default")
+	}
 	if secret == "dev-only-secret-change-me" {
 		log.Println("warning: RESEARCH_ID_SECRET is not set, using the development default")
 	}
@@ -45,9 +49,10 @@ func main() {
 	defer db.Close()
 
 	summary, err := loader.LoadFile(context.Background(), db, dataFile, schema, loader.Config{
-		MaxBinaryBytes: maxBinaryMB << 20,
-		MaxRecordBytes: maxRecordMB << 20,
-		Ranges:         ranges,
+		MaxBinaryBytes:   maxBinaryMB << 20,
+		MaxRecordBytes:   maxRecordMB << 20,
+		Ranges:           ranges,
+		IdentifierSecret: []byte(identifierSecret),
 	})
 	if err != nil {
 		log.Fatalf("load data: %v", err)

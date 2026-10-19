@@ -88,10 +88,23 @@ func insertPatient(rec *recordCtx) error {
 	if b, ok := r["active"].(bool); ok {
 		active = b
 	}
-	return exec(rec, `INSERT INTO patients (id, raw_resource_id, full_name, family_name, given_names, gender, birth_date, deceased_date, active)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+
+	// SSN: only a keyed hash is kept, and only for numbers that could be real.
+	var ssnHash string
+	if digits, found, problem := patientSSN(r); found && problem != "" {
+		if err := rec.issue(InvalidSSN, Warning, "identifier", "SSN "+problem, "not used for matching"); err != nil {
+			return err
+		}
+	} else if found {
+		ssnHash = hashSSN(rec.l.cfg.IdentifierSecret, digits)
+	}
+
+	return exec(rec, `INSERT INTO patients (id, raw_resource_id, full_name, family_name, given_names, gender, birth_date,
+			deceased_date, active, name_key, ssn_hash, person_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.id, rec.line, store.Nullable(fullName), store.Nullable(family), store.Nullable(givenNames),
-		store.Nullable(gender), store.Nullable(birthDate), store.Nullable(deceased), active)
+		store.Nullable(gender), store.Nullable(birthDate), store.Nullable(deceased), active,
+		store.Nullable(nameKey(fullName)), store.Nullable(ssnHash), rec.id)
 }
 
 // ---------- Observation ----------
