@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -214,10 +215,11 @@ func (l *Loader) processLine(lineNo int64, line []byte) error {
 		return err
 	}
 
-	// FHIR schema check.
+	// validate data against FHIR schema using external library.
 	if err := l.schemaCheck(rec); err != nil {
 		return err
 	}
+	// fhir doesn't allow for empty lists
 	if err := rec.checkEmptyLists(record, ""); err != nil {
 		return err
 	}
@@ -268,35 +270,42 @@ func (l *Loader) insertRaw(rec *recordCtx, keepJSON bool) error {
 		VALUES (?, ?, ?, ?, 1, ?)`, rec.line, rec.resourceType, rec.id, patientRef, rawJSON)
 }
 
-// checkDuplicateID handles a type + id that was already loaded.
-// Identical copy: skip it. Changed copy: the newer version replaces the old one.
+// checkDuplicateID handles a type + id seen earlier in the file:
+//   - first time: remember it and load it
+//   - identical copy: skip it
+//   - changed copy: the newer version wins. Newer means a later meta.lastUpdated;
+//     without one, the later line in the file.
 func (l *Loader) checkDuplicateID(rec *recordCtx, h handler) (skip bool, err error) {
 	key := rec.resourceType + "/" + rec.id
 	canonical, _ := json.Marshal(rec.r) // Go sorts map keys, so equal content gives equal bytes
-	lastUpdated := fhir.Str(rec.r, "meta", "lastUpdated")
+	this := seenRecord{line: rec.line, canonical: canonical, lastUpdated: fhir.Str(rec.r, "meta", "lastUpdated")}
 	prev, seen := l.seen[key]
-	if !seen {
-		l.seen[key] = seenRecord{line: rec.line, canonical: canonical, lastUpdated: lastUpdated}
+
+	switch {
+	case !seen:
+		l.seen[key] = this
 		return false, nil
-	}
-	if bytes.Equal(prev.canonical, canonical) {
+	case bytes.Equal(prev.canonical, this.canonical):
 		return true, rec.issue(DuplicateID, Info, "id", fmt.Sprintf("identical copy of line %d", prev.line), "skipped copy")
+	case isLater(prev.lastUpdated, this.lastUpdated):
+		return true, rec.issue(DuplicateIDChanged, Warning, "id",
+			fmt.Sprintf("changed copy of line %d, but line %d has a newer meta.lastUpdated", prev.line, prev.line), "kept the newer version")
 	}
 
-	// Different content. The later line wins, unless meta.lastUpdated says the earlier one is newer.
-	if prev.lastUpdated != "" && lastUpdated != "" {
-		_, prevT, ok1 := fhir.ParseDate(prev.lastUpdated)
-		_, curT, ok2 := fhir.ParseDate(lastUpdated)
-		if ok1 && ok2 && prevT.After(curT) {
-			return true, rec.issue(DuplicateIDChanged, Warning, "id",
-				fmt.Sprintf("changed copy of line %d, but line %d has a newer meta.lastUpdated", prev.line, prev.line), "kept the newer version")
-		}
-	}
-	if err := h.remove(rec.l.tx, rec.id); err != nil {
+	// This copy is newer: remove the earlier version's rows and load this one.
+	if err := h.remove(l.tx, rec.id); err != nil {
 		return false, err
 	}
-	l.seen[key] = seenRecord{line: rec.line, canonical: canonical, lastUpdated: lastUpdated}
+	l.seen[key] = this
 	return false, rec.issue(DuplicateIDChanged, Warning, "id", fmt.Sprintf("replaces the version on line %d", prev.line), "kept the later version")
+}
+
+// isLater reports whether timestamp a is later than b. A missing or unreadable
+// timestamp is never later.
+func isLater(a, b string) bool {
+	_, ta, okA := fhir.ParseDate(a)
+	_, tb, okB := fhir.ParseDate(b)
+	return okA && okB && ta.After(tb)
 }
 
 // schemaCheck validates the record against the official FHIR schema and turns
@@ -311,15 +320,15 @@ func (l *Loader) schemaCheck(rec *recordCtx) error {
 		action := "kept the record"
 		field := strings.TrimPrefix(p.Path, "/")
 		switch {
-		case p.Keyword == "required" && strings.Contains(p.Message, "code"):
+		case p.Keyword == validate.KeywordRequired && slices.Contains(p.Missing, "code"):
 			continue // a missing code is reported as MISSING_CODE by the type's own rules
-		case p.Keyword == "enum" && strings.HasSuffix(strings.ToLower(field), "status"):
+		case p.Keyword == validate.KeywordEnum && strings.HasSuffix(strings.ToLower(field), "status"):
 			issueType, action = InvalidStatus, "status stored as null"
-		case p.Keyword == "pattern" && isDateField(field):
+		case p.Keyword == validate.KeywordPattern && isDateField(field):
 			issueType, action = InvalidDate, "date stored as null"
-		case p.Keyword == "type" && strings.Contains(field, "value"):
+		case p.Keyword == validate.KeywordType && strings.Contains(field, "value"):
 			issueType, action = InvalidValueType, "value stored as null"
-		case (p.Keyword == "type" || p.Keyword == "pattern") && isPatientLinkField(field):
+		case (p.Keyword == validate.KeywordType || p.Keyword == validate.KeywordPattern) && isPatientLinkField(field):
 			issueType, action = InvalidReference, "left unlinked"
 		}
 		rec.flagged[field] = true

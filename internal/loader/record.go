@@ -2,7 +2,8 @@ package loader
 
 import (
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 
 	"github.com/lwatanabe808/novellia-fhir-api/internal/fhir"
 )
@@ -124,17 +125,8 @@ func allowed(value string, set ...string) string {
 func (rec *recordCtx) checkEmptyLists(v any, path string) error {
 	switch t := v.(type) {
 	case map[string]any:
-		keys := make([]string, 0, len(t))
-		for k := range t {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys) // stable issue order
-		for _, k := range keys {
-			p := k
-			if path != "" {
-				p = path + "." + k
-			}
-			if err := rec.checkEmptyLists(t[k], p); err != nil {
+		for _, k := range slices.Sorted(maps.Keys(t)) { // sorted, so issues come out in the same order every time
+			if err := rec.checkEmptyLists(t[k], joinPath(path, k)); err != nil {
 				return err
 			}
 		}
@@ -149,6 +141,14 @@ func (rec *recordCtx) checkEmptyLists(v any, path string) error {
 		}
 	}
 	return nil
+}
+
+// joinPath adds a field name to a path: "" + "name" = "name", "name" + "given" = "name.given".
+func joinPath(path, field string) string {
+	if path == "" {
+		return field
+	}
+	return path + "." + field
 }
 
 func pathString(path []any) string {

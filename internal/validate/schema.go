@@ -23,11 +23,24 @@ var schemaJSON []byte
 
 const schemaURL = "file:///fhir.schema.json"
 
+// Keyword is the kind of schema rule a record broke.
+type Keyword string
+
+const (
+	KeywordEnum                 Keyword = "enum"                 // value not in the allowed list
+	KeywordType                 Keyword = "type"                 // wrong kind of value, like text where a number goes
+	KeywordPattern              Keyword = "pattern"              // text in the wrong format, like a bad date
+	KeywordRequired             Keyword = "required"             // a required field is missing
+	KeywordAdditionalProperties Keyword = "additionalProperties" // a field FHIR doesn't define
+	KeywordOther                Keyword = "other"
+)
+
 // Problem is one schema error, already reduced to something readable.
 type Problem struct {
-	Path    string // e.g. "/status" or "/valueQuantity/value"
-	Keyword string // enum, type, pattern, required, additionalProperties...
-	Message string
+	Path    string   // e.g. "/status" or "/valueQuantity/value"
+	Keyword Keyword  // which kind of rule was broken
+	Message string   // e.g. "value done is not allowed"
+	Missing []string // for KeywordRequired: the missing field names
 }
 
 // Schema validates records against the FHIR R4 schema, one resource type at a time.
@@ -47,7 +60,7 @@ func NewSchema(checkTypes []string) (*Schema, error) {
 	c := jsonschema.NewCompiler()
 	// The schema doc says it's written in draft 6
 	c.DefaultDraft(jsonschema.Draft6)
-	// add the unmarshaled schema to the compiler and name it file:///fhir.schema.json
+	// add the unmarshaled schema to the compiler and named it file:///fhir.schema.json
 	if err := c.AddResource(schemaURL, doc); err != nil {
 		return nil, err
 	}
@@ -62,15 +75,16 @@ func NewSchema(checkTypes []string) (*Schema, error) {
 		return nil, err
 	}
 
-	// Build each checker: Compile gathers that type's rules, following every
-	// link to shared rules (Reference, CodeableConcept...), into one checker.
+	// c.Compile is from an external library that references the
+	// json schema to find the rules for a given type
+	// then returns a checker against those rules
 	checkers := map[string]*jsonschema.Schema{}
 	for _, t := range checkTypes {
-		sch, err := c.Compile(schemaURL + "#/definitions/" + t)
+		checker, err := c.Compile(schemaURL + "#/definitions/" + t)
 		if err != nil {
 			return nil, fmt.Errorf("build %s checker: %w", t, err)
 		}
-		checkers[t] = sch
+		checkers[t] = checker
 	}
 	return &Schema{types: meta.Discriminator.Mapping, checkers: checkers}, nil
 }
@@ -92,6 +106,7 @@ func (s *Schema) Validate(resourceType string, rawLine []byte) ([]Problem, error
 	if err != nil {
 		return nil, err
 	}
+	// use external library to validate the data against schema.
 	err = sch.Validate(inst)
 	if err == nil {
 		return nil, nil
@@ -100,33 +115,33 @@ func (s *Schema) Validate(resourceType string, rawLine []byte) ([]Problem, error
 	if !errors.As(err, &ve) {
 		return nil, err
 	}
-	return collectLeaves(ve), nil
+	return collectSchemaProblems(ve), nil
 }
 
-// collectLeaves walks the error tree and keeps only the most specific errors
-// (the leaves): "status: value done is not allowed", not "the record is invalid".
-func collectLeaves(ve *jsonschema.ValidationError) []Problem {
+// collectSchemaProblems lists the problems found when validating a record
+// against the schema. Retains only specific problems
+func collectSchemaProblems(ve *jsonschema.ValidationError) []Problem {
 	if len(ve.Causes) > 0 {
 		var out []Problem
 		for _, c := range ve.Causes {
-			out = append(out, collectLeaves(c)...)
+			out = append(out, collectSchemaProblems(c)...)
 		}
 		return out
 	}
 	p := Problem{Path: "/" + strings.Join(ve.InstanceLocation, "/")}
 	switch k := ve.ErrorKind.(type) {
 	case *kind.Enum:
-		p.Keyword, p.Message = "enum", fmt.Sprintf("value %v is not allowed", k.Got)
+		p.Keyword, p.Message = KeywordEnum, fmt.Sprintf("value %v is not allowed", k.Got)
 	case *kind.Type:
-		p.Keyword, p.Message = "type", fmt.Sprintf("expected %s, got %s", strings.Join(k.Want, " or "), k.Got)
+		p.Keyword, p.Message = KeywordType, fmt.Sprintf("expected %s, got %s", strings.Join(k.Want, " or "), k.Got)
 	case *kind.Pattern:
-		p.Keyword, p.Message = "pattern", fmt.Sprintf("%q is not in the required format", k.Got)
+		p.Keyword, p.Message = KeywordPattern, fmt.Sprintf("%q is not in the required format", k.Got)
 	case *kind.Required:
-		p.Keyword, p.Message = "required", "missing "+strings.Join(k.Missing, ", ")
+		p.Keyword, p.Message, p.Missing = KeywordRequired, "missing "+strings.Join(k.Missing, ", "), k.Missing
 	case *kind.AdditionalProperties:
-		p.Keyword, p.Message = "additionalProperties", "unknown field "+strings.Join(k.Properties, ", ")
+		p.Keyword, p.Message = KeywordAdditionalProperties, "unknown field "+strings.Join(k.Properties, ", ")
 	default:
-		p.Keyword, p.Message = "other", ve.Error()
+		p.Keyword, p.Message = KeywordOther, ve.Error()
 	}
 	return []Problem{p}
 }
