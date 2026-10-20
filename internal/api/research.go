@@ -21,10 +21,10 @@ import (
 //   - ages over 89 shown as "90+", and dates reduced to the year
 //     (both from the HIPAA Safe Harbor rules)
 //   - only trustworthy records: no duplicates, corrections replaced, no
-//     impossible or implausible values, no refuted or entered-in-error data
+//     impossible values, no refuted or entered-in-error data
 
 // usableObservation is the filter for observations that research can trust.
-const usableObservation = `o.is_primary = 1 AND o.replaced_by IS NULL AND o.is_impossible = 0 AND o.is_implausible = 0
+const usableObservation = `o.is_primary = 1 AND o.replaced_by IS NULL AND o.is_impossible = 0
 	AND coalesce(o.status, '') IN ('final', 'amended', 'corrected')`
 
 // usableCondition leaves out diagnoses that were ruled out or entered by mistake.

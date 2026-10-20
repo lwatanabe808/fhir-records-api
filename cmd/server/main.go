@@ -36,10 +36,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("load FHIR schema: %v", err)
 	}
-	ranges, err := validate.LoadRanges(os.Getenv("PLAUSIBLE_RANGES_FILE"))
-	if err != nil {
-		log.Fatalf("load plausible ranges: %v", err)
-	}
 	db, err := store.Open(dbPath)
 	if err != nil {
 		log.Fatalf("open database: %v", err)
@@ -51,7 +47,6 @@ func main() {
 	summary, err := loader.LoadFile(context.Background(), db, dataFile, schema, loader.Config{
 		MaxBinaryBytes: maxBinaryMB * 1_000_000,
 		MaxRecordBytes: maxRecordMB * 1_000_000,
-		Ranges:         ranges,
 		SSNSecret:      []byte(ssnSecret),
 	})
 	if err != nil {

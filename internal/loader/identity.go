@@ -41,12 +41,12 @@ func nameKey(name string) string {
 
 // patientSSN finds the patient's SSN identifier. It returns the digits and
 // a reason when the number can't be used for matching.
-func patientSSN(r fhir.Obj) (digits string, found bool, problem string) {
-	for _, ident := range fhir.List(r, "identifier") {
-		if fhir.Str(ident, "system") != SSNSystem {
+func patientSSN(identifiers []fhir.Identifier) (digits string, found bool, problem string) {
+	for _, ident := range identifiers {
+		if ident.System != SSNSystem {
 			continue
 		}
-		value := fhir.Str(ident, "value")
+		value := ident.Value
 		var b strings.Builder
 		for _, c := range value {
 			if c >= '0' && c <= '9' {

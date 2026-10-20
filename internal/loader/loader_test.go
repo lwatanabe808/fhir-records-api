@@ -22,14 +22,9 @@ func load(t *testing.T, path string) (*sql.DB, Summary) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ranges, err := validate.LoadRanges("")
-	if err != nil {
-		t.Fatal(err)
-	}
 	sum, err := LoadFile(context.Background(), db, path, schema, Config{
 		MaxBinaryBytes: 100, // small limits so the test file can trigger them
 		MaxRecordBytes: 2000,
-		Ranges:         ranges,
 		Now:            func() time.Time { return time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
@@ -100,9 +95,7 @@ func TestMessyFile(t *testing.T) {
 		{"o-multi", MultipleValues},
 		{"o-nounit", MissingUnit},
 		{"o-o2", ImpossibleValue},
-		{"o-bp", ImpossibleValue},
 		{"o-future", ImpossibleValue},
-		{"o-implausible", ImplausibleValue},
 		{"o-prebirth", ImpossibleValue},
 		{"m-empty", EmptyList},
 		{"o-case", CaseMismatchReference},
@@ -163,8 +156,8 @@ func TestMessyFile(t *testing.T) {
 		{"amended replaces original", `SELECT replaced_by FROM observations WHERE id = 'o-orig'`, "o-amend"},
 		{"amended stays primary", `SELECT is_primary FROM observations WHERE id = 'o-amend'`, "1"},
 		{"impossible flagged", `SELECT is_impossible FROM observations WHERE id = 'o-o2'`, "1"},
-		{"bp impossible flagged", `SELECT is_impossible FROM observations WHERE id = 'o-bp'`, "1"},
-		{"implausible flagged, not impossible", `SELECT is_impossible || is_implausible FROM observations WHERE id = 'o-implausible'`, "01"},
+		{"blood pressure parts are both saved", `SELECT COUNT(*) FROM observation_values WHERE observation_id = 'o-bp' AND is_component = 1`, "2"},
+		{"high but possible value is not flagged", `SELECT is_impossible FROM observations WHERE id = 'o-implausible'`, "0"},
 		{"empty dosage stored as null", `SELECT dosage FROM medications WHERE id = 'm-empty'`, ""},
 		{"inline attachment decoded", `SELECT text FROM binaries WHERE id = 'd1-inline-1'`, "Inline note text."},
 		{"bad base64: no data", `SELECT data FROM binaries WHERE id = 'b-bad'`, ""},

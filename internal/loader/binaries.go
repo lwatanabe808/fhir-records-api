@@ -17,18 +17,23 @@ import (
 // Its content is in one or more attachments. Each attachment either links to a
 // Binary record ("url": "Binary/binary-001") or carries the base64 inline ("data").
 func insertDocumentReference(rec *recordCtx) error {
-	r := rec.r
+	var d fhir.DocumentReference
+	rec.decode(&d)
+
 	patientRef, err := rec.patientRef()
 	if err != nil {
 		return err
 	}
-	date, err := rec.date("date")
+	date, err := rec.date("date", d.Date)
 	if err != nil {
 		return err
 	}
-	noteType := fhir.FirstCoding(r["type"])
-	status := allowed(fhir.Str(r, "status"), "current", "superseded", "entered-in-error")
-	author := fhir.Str(r, "author", 0, "reference")
+	noteType := d.Type.First()
+	status := allowed(d.Status, "current", "superseded", "entered-in-error")
+	var author string
+	if len(d.Author) > 0 {
+		author = d.Author[0].Reference
+	}
 	if err := rec.l.exec(`INSERT INTO document_references (id, raw_resource_id, patient_ref, status, note_type, note_type_code, date, author)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.id, rec.line, patientRef, status, noteType.Name(),
@@ -36,18 +41,19 @@ func insertDocumentReference(rec *recordCtx) error {
 		return err
 	}
 
-	for i, content := range fhir.List(r, "content") {
-		att := fhir.Get(content, "attachment")
+	for i, content := range d.Content {
+		att := content.Attachment
 		field := fmt.Sprintf("content/%d/attachment", i)
-		declared := fhir.Str(att, "contentType")
-		data, hasData := fhir.Get(att, "data").(string)
-		url := fhir.Str(att, "url")
+		declared, url := att.ContentType, att.URL
 
+		if rec.flagged[field+"/data"] {
+			att.Data = nil // wrong type: Go's decoder may have left "" here
+		}
 		switch {
-		case hasData:
+		case att.Data != nil:
 			// Inline content: stored in binaries like any other Binary, with a generated id.
 			inlineID := fmt.Sprintf("%s-inline-%d", rec.id, i+1)
-			if err := rec.storeBinary(inlineID, declared, data, true); err != nil {
+			if err := rec.storeBinary(inlineID, declared, *att.Data, true); err != nil {
 				return err
 			}
 			if err := linkAttachment(rec, inlineID, declared); err != nil {
@@ -93,7 +99,9 @@ func linkAttachment(rec *recordCtx, binaryID, declaredType string) error {
 // ---------- Binary ----------
 
 func insertBinaryResource(rec *recordCtx) error {
-	return rec.storeBinary(rec.id, fhir.Str(rec.r, "contentType"), fhir.Str(rec.r, "data"), false)
+	var b fhir.Binary
+	rec.decode(&b)
+	return rec.storeBinary(rec.id, b.ContentType, b.Data, false)
 }
 
 // storeBinary checks and decodes base64 content and stores it in binaries.

@@ -27,9 +27,8 @@ func newTestServerWithCell(t *testing.T, file string, minCellSize int) http.Hand
 	}
 	t.Cleanup(func() { db.Close() })
 	schema, _ := validate.NewSchema(loader.SupportedTypes())
-	ranges, _ := validate.LoadRanges("")
 	sum, err := loader.LoadFile(context.Background(), db, file, schema, loader.Config{
-		MaxBinaryBytes: 100, MaxRecordBytes: 2000, Ranges: ranges,
+		MaxBinaryBytes: 100, MaxRecordBytes: 2000,
 		Now: func() time.Time { return time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {

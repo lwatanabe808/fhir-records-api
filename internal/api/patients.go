@@ -400,7 +400,7 @@ func nullIfEmpty(s string) any {
 
 func (s *Server) patientObservations(w http.ResponseWriter, r *http.Request) {
 	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, code_system, lab_test_code, name, label, status,
-		measured_at, is_primary, replaced_by, is_impossible, is_implausible FROM observations`)
+		measured_at, is_primary, replaced_by, is_impossible FROM observations`)
 	if !ok {
 		return
 	}
@@ -436,9 +436,9 @@ func (s *Server) patientObservations(w http.ResponseWriter, r *http.Request) {
 		var oid string
 		var raw int64
 		var system, code, name, label, st, at, replacedBy sql.NullString
-		var primary, impossible, implausible bool
+		var primary, impossible bool
 		if err := rows.Scan(&oid, &raw, &system, &code, &name, &label, &st, &at,
-			&primary, &replacedBy, &impossible, &implausible); err != nil {
+			&primary, &replacedBy, &impossible); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -458,9 +458,6 @@ func (s *Server) patientObservations(w http.ResponseWriter, r *http.Request) {
 				hidden = append(hidden, "status "+st.String)
 			}
 			item["hiddenBecause"] = hidden
-		}
-		if implausible {
-			item["implausible"] = true
 		}
 		raws = append(raws, raw)
 		items = append(items, item)

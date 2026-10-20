@@ -55,7 +55,6 @@ make test
 | `PATIENT_ID_SECRET` | dev default | Key for the de-identified research ids. Set it in any real environment. |
 | `SSN_SECRET` | dev default | Key used to hash Social Security numbers before they are stored. Set it in any real environment. |
 | `MIN_CELL_SIZE` | `5` | Research counts below this show as `<5` (condition counts, lab summaries, dataset profile). The sample has only 16 patients, so most groups are hidden; use `MIN_CELL_SIZE=1` to see every number in a demo. |
-| `PLAUSIBLE_RANGES_FILE` | built in | JSON file of plausible ranges per lab test |
 
 ## Who uses this API
 
@@ -121,7 +120,7 @@ Partners describe the patients they need as **inclusion and exclusion criteria**
 **De-identified by design:**
 - No names, patient ids or birth dates. Each patient gets a research id, an HMAC of the patient id with a secret key, so it is stable but can't be reversed.
 - Ages over 89 are shown as `90+`, and dates are reduced to the year (from the HIPAA Safe Harbor rules).
-- Only trustworthy records count: no non-primary duplicates, corrections replace originals, no impossible or implausible values, and no refuted or entered-in-error diagnoses.
+- Only trustworthy records count: no non-primary duplicates, corrections replace originals, no impossible values, and no refuted or entered-in-error diagnoses.
 
 ### Dataset profile
 
@@ -133,7 +132,7 @@ Partners describe the patients they need as **inclusion and exclusion criteria**
 | How much data per patient? How current? | `history.datedRecordsPerPatient`, `history.yearsSinceLatestRecord` |
 | How complete are the key fields? | `completenessPercent`: birth date, gender, linked records, codes, units, dosages, readable notes |
 | Is it coded in standard terms? | `codingStandards`: percent LOINC, SNOMED, RxNorm, other, or none, per record type |
-| How clean is it? | `quality`: impossible, implausible, duplicate or replaced values, failed lines, possible duplicate patients |
+| How clean is it? | `quality`: impossible, duplicate or replaced values, failed lines, possible duplicate patients |
 | Who is in it? | `population`: age bands and gender, with groups under `MIN_CELL_SIZE` shown as `<5` |
 
 It reports medians, not means, because a few extreme patients would pull a mean off.
@@ -165,7 +164,7 @@ raw_resources ─┬─ patients
 ```
 
 - Every clean table has `raw_resource_id`, the line it came from.
-- `observations` has `is_primary` and `replaced_by` for duplicates and corrections, and `is_impossible` / `is_implausible` flags.
+- `observations` has `is_primary` and `replaced_by` for duplicates and corrections, and an `is_impossible` flag.
 - `observation_values` holds every result value in one place. A single result like A1c 7.8 % is one row. A multi-part result like blood pressure has one row per part (systolic, diastolic), each with its own lab test code. So any query for a lab test code finds its numbers in one table, wherever FHIR put them. For example, `/research/labs/8480-6` summarizes systolic blood pressure.
 - `document_attachments` is a link table because a note can have several attachments and several notes can share one Binary. Inline attachments (base64 inside the note) are stored in `binaries` with a generated id like `docref-001-inline-1`.
 - `issues` has a `group_key` that ties together records in the same duplicate or correction group.
@@ -202,8 +201,7 @@ Each case below is covered by a test in [internal/loader/loader_test.go](interna
 | 18 | More than one value in an Observation | Own check | Keep the first, in a fixed order | `MULTIPLE_VALUES` | warning |
 | 19 | Number with no unit | Own check | Unit null | `MISSING_UNIT` | warning |
 | 20 | Empty list (e.g. dosage) | Own check (the schema allows it) | Stored as null | `EMPTY_LIST` | warning |
-| 21 | Impossible value: negative, over 100%, systolic not above diastolic, dated in the future, before birth, after death | Own check | Hidden by default, excluded from research | `IMPOSSIBLE_VALUE` | error |
-| 22 | Outside the plausible range for that test | Own check, config file | Shown with a warning, excluded from research | `IMPLAUSIBLE_VALUE` | warning |
+| 21 | Impossible value: negative, over 100%, dated in the future, before birth, after death | Own check | Hidden by default, excluded from research | `IMPOSSIBLE_VALUE` | error |
 | 23 | Unexpected error in my code on one record | Recover | Keep going | `PROCESSING_ERROR` | error |
 | **Binaries and attachments** |||||
 | 24 | Inline attachment (`data` in the note) | Own check | Normal case: stored in `binaries` with a generated id | none | |
@@ -257,7 +255,7 @@ Besides the sample file, [testdata/scenarios](testdata/scenarios) has input file
 | `08-dates` | Partial dates, time zones, same day with no time, after death, February 30 | Date-only readings not treated as duplicates |
 | `09-two-clinics` | Same person from two clinics, repeated and corrected records, `meta.lastUpdated` | Patients never merged, newest version kept |
 | `10-attachments` | PDF, HTML, inline data, a Binary shared by two notes, an image labeled as text | Each stored with the right type and text |
-| `11-values` | Other units, zero, negative, huge, wrong types, `dataAbsentReason` | Impossible hidden, implausible flagged |
+| `11-values` | Other units, zero, negative, huge, wrong types, a missing value with a reason | Impossible hidden, every missing value logged |
 | `13-identifiers` | Same SSN across clinics, SSN conflict, placeholder, partial and fake SSNs, accented names | One combined chart, one conflict, SSNs never returned |
 | `12-bulk` | 22,000 records (built by `make scenarios`, not kept in git) | Loads in about 3 seconds |
 
@@ -281,7 +279,6 @@ Besides the sample file, [testdata/scenarios](testdata/scenarios) has input file
 - **SSNs are never stored or returned.** The loader keeps only a keyed hash (HMAC with `SSN_SECRET`) for matching. The original record is kept as received, so every endpoint that returns raw JSON replaces the SSN with `[redacted]`.
 - **Duplicates are flagged, never deleted.** The clean view shows one primary record with a warning, and the others are one parameter away.
 - **Medical meaning is not judged.** The API checks structure and consistency. Whether a label like "History of MI" fits an active status, or whether a code and its label describe the same thing, needs clinical judgment.
-- **Plausible ranges are placeholders.** They are deliberately wide limits meant to catch typos, not medical judgments, and they live in a config file so a clinician can correct them.
 - **Logs skip query strings,** because they can contain health details.
 
 ## Authentication (not built)
@@ -308,7 +305,8 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 - **Exact decimals.** Lab values are stored as floating point numbers, which is fine for filtering and display but drops FHIR's decimal precision (`7.80` vs `7.8`). The original text is kept in `raw_resources`; a clean column for it would be next.
 - **Code checks against LOINC and SNOMED** through a terminology server, so a code that doesn't exist gets flagged. Today only the presence of a code and its code system is checked.
 - **Fetch web address attachments** from the source system using the patient's portal connection, and store large files in a private, encrypted S3 bucket, served through short-lived pre-signed URLs.
-- **Implausible values from data** at scale: percentiles or median-based ranges per test, not means and standard deviations, which outliers distort.
+- **Cross-checks between values,** like a blood pressure whose systolic (top) number isn't higher than its diastolic (bottom) number.
+- **Implausible values** (possible, but likely a typo, like an A1c of 78%): ranges per lab test, reviewed by a clinician, or learned from the data with percentiles rather than means, which outliers distort.
 - **Code and label checks** using medical synonym data or an LLM that flags suspicious pairs for a person to review.
 - **Small-count suppression in cohort results** too (condition counts, lab summaries and the dataset profile already hide small groups), so a very small cohort can't single out a person.
 - **FHIR Bundles** unpacked when a line contains one, and contained resources (`#id` attachments).
@@ -319,7 +317,7 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 ```
 cmd/server/          main: settings, load, serve
 internal/fhir/       helpers for reading FHIR JSON
-internal/validate/   FHIR schema check, impossible and plausible range rules
+internal/validate/   FHIR schema check and impossible value rules
 internal/loader/     the two-pass loader and every validation case
 internal/store/      database setup and schema.sql
 internal/api/        HTTP endpoints (patients, research, data quality)

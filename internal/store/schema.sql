@@ -51,8 +51,7 @@ CREATE TABLE observations (
   issued          TEXT,
   is_primary      INTEGER NOT NULL DEFAULT 1,  -- 0 when another record in its duplicate group wins
   replaced_by     TEXT,                        -- set when an amended record replaces this one
-  is_impossible   INTEGER NOT NULL DEFAULT 0,  -- hidden by default
-  is_implausible  INTEGER NOT NULL DEFAULT 0   -- shown with a warning, excluded from research
+  is_impossible   INTEGER NOT NULL DEFAULT 0   -- hidden by default
 );
 -- A patient's results for one test, newest first (patient views, summary, duplicate check).
 CREATE INDEX idx_obs_patient_test ON observations(patient_id, lab_test_code, measured_at);

@@ -82,11 +82,6 @@ func (c Coding) Name() string {
 	return c.Text
 }
 
-// CodeOnly reads just the code of a CodeableConcept, e.g. clinicalStatus.
-func CodeOnly(concept any) string {
-	return Str(concept, "coding", 0, "code")
-}
-
 var refPattern = regexp.MustCompile(`^([A-Za-z]+)/([A-Za-z0-9\-.]{1,64})$`)
 
 // ParseRef splits a relative reference like "Patient/noah-wyle" into type and id.

@@ -31,7 +31,6 @@ const (
 	MissingUnit       = "MISSING_UNIT"
 	EmptyList         = "EMPTY_LIST"
 	ImpossibleValue   = "IMPOSSIBLE_VALUE"
-	ImplausibleValue  = "IMPLAUSIBLE_VALUE"
 	InvalidSSN        = "INVALID_SSN"
 
 	// Binaries and attachments

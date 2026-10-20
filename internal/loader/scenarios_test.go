@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,14 +147,12 @@ func TestScenarioAttachments(t *testing.T) {
 func TestScenarioValues(t *testing.T) {
 	db, _ := scenario(t, "11-values.jsonl")
 	wantIssue(t, db, "ob-1102", ImpossibleValue)  // negative
-	wantIssue(t, db, "ob-1101", ImplausibleValue) // glucose 0
-	wantIssue(t, db, "ob-1103", ImplausibleValue) // 1,000,000,000 kg
 	wantIssue(t, db, "ob-1104", InvalidValueType) // true as a value
 	wantValue(t, db, `SELECT value FROM observation_values WHERE is_component = 0 AND observation_id = 'ob-1104'`, "NULL")
 	wantValue(t, db, `SELECT value FROM observation_values WHERE is_component = 0 AND observation_id = 'ob-1106'`, "170")
 	wantValue(t, db, `SELECT value_text FROM observation_values WHERE is_component = 0 AND observation_id = 'ob-1107'`, "normal")
-	if got := issueTypes(t, db, "ob-1108"); len(got) != 0 { // dataAbsentReason explains the missing value
-		t.Errorf("ob-1108: want no issues, got %v", got)
+	if got := issueTypes(t, db, "ob-1108"); !slices.Contains(got, MissingValue) { // logged even with a dataAbsentReason
+		t.Errorf("ob-1108: want MISSING_VALUE, got %v", got)
 	}
 	if got := issueTypes(t, db, "ob-1100"); len(got) != 0 { // other units are kept, not judged
 		t.Errorf("ob-1100: want no issues, got %v", got)
@@ -180,9 +179,8 @@ func TestScenarioBulk(t *testing.T) {
 	}
 	defer db.Close()
 	schema, _ := validate.NewSchema(SupportedTypes())
-	ranges, _ := validate.LoadRanges("")
 	start := time.Now()
-	sum, err := Load(context.Background(), db, &buf, schema, Config{MaxBinaryBytes: 5_000_000, MaxRecordBytes: 10_000_000, Ranges: ranges})
+	sum, err := Load(context.Background(), db, &buf, schema, Config{MaxBinaryBytes: 5_000_000, MaxRecordBytes: 10_000_000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,4 +253,25 @@ func TestNewestCorrection(t *testing.T) {
 	if got, ok := newest([]obsRow{a, b}); got.id != "b" || !ok {
 		t.Errorf("want b, decided; got %s, %v", got.id, ok)
 	}
+}
+
+func TestComponentWithSeveralValues(t *testing.T) {
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	schema, _ := validate.NewSchema(SupportedTypes())
+	file := `{"resourceType":"Patient","id":"p1"}
+{"resourceType":"Observation","id":"bp","status":"final","subject":{"reference":"Patient/p1"},
+ "code":{"coding":[{"system":"http://loinc.org","code":"85354-9"}]},"effectiveDateTime":"2024-01-01T08:00:00Z",
+ "component":[{"code":{"coding":[{"system":"http://loinc.org","code":"8480-6"}]},
+   "valueQuantity":{"value":120,"unit":"mmHg"},"valueString":"high"}]}`
+	file = strings.ReplaceAll(file, "\n ", " ")
+	if _, err := Load(context.Background(), db, strings.NewReader(file), schema, Config{MaxBinaryBytes: 5_000_000, MaxRecordBytes: 10_000_000}); err != nil {
+		t.Fatal(err)
+	}
+	wantIssue(t, db, "bp", MultipleValues)
+	// The first value in our order (the number) is kept.
+	wantValue(t, db, `SELECT value FROM observation_values WHERE observation_id = 'bp' AND lab_test_code = '8480-6'`, "120")
 }

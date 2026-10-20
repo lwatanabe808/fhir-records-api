@@ -46,7 +46,6 @@ func (s *Server) datasetProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	quality, err := s.percentages(map[string]string{
 		"observationsImpossible":          `SELECT avg(is_impossible) FROM observations`,
-		"observationsImplausible":         `SELECT avg(is_implausible) FROM observations`,
 		"observationsDuplicateOrReplaced": `SELECT avg(is_primary = 0) FROM observations`,
 		"linesThatFailedToLoad":           `SELECT avg(parsed_ok = 0 OR resource_type IS NULL) FROM raw_resources`,
 	})

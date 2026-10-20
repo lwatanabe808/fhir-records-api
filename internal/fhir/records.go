@@ -1,0 +1,149 @@
+package fhir
+
+// The FHIR fields the loader reads, one struct per record type. A record is
+// decoded into its struct in one step (recordCtx.decode in the loader), so each handler can use
+// p.BirthDate instead of looking fields up one at a time.
+// Only the fields we use are listed. The rest stay in raw_resources.
+
+// CodeableConcept is a coded value: a list of codes plus a free-text label.
+type CodeableConcept struct {
+	Coding []struct {
+		System  string `json:"system"`
+		Code    string `json:"code"`
+		Display string `json:"display"`
+	} `json:"coding"`
+	Text string `json:"text"`
+}
+
+// First returns the first code and the label.
+func (c CodeableConcept) First() Coding {
+	out := Coding{Text: c.Text}
+	if len(c.Coding) > 0 {
+		out.System, out.Code, out.Display = c.Coding[0].System, c.Coding[0].Code, c.Coding[0].Display
+	}
+	return out
+}
+
+type Reference struct {
+	Reference string `json:"reference"`
+}
+
+type Period struct {
+	Start string `json:"start"`
+}
+
+type Meta struct {
+	LastUpdated string `json:"lastUpdated"`
+}
+
+type Identifier struct {
+	System string `json:"system"`
+	Value  string `json:"value"`
+}
+
+type HumanName struct {
+	Family string   `json:"family"`
+	Given  []string `json:"given"` // first and middle names
+	Text   string   `json:"text"`  // the full name as it should be displayed
+}
+
+type Patient struct {
+	Name             []HumanName  `json:"name"`
+	Gender           string       `json:"gender"`
+	BirthDate        string       `json:"birthDate"`
+	DeceasedDateTime string       `json:"deceasedDateTime"`
+	Active           *bool        `json:"active"` // nil when missing
+	Identifier       []Identifier `json:"identifier"`
+}
+
+// Value holds the value fields we read from an observation or a component.
+// FHIR allows 11 kinds of value (value[x]); these are the ones we store.
+// Only one should be set; a pointer is nil when its field is missing.
+type Value struct {
+	ValueQuantity        *Quantity        `json:"valueQuantity"`
+	ValueString          *string          `json:"valueString"`
+	ValueBoolean         *bool            `json:"valueBoolean"`
+	ValueInteger         *float64         `json:"valueInteger"`
+	ValueCodeableConcept *CodeableConcept `json:"valueCodeableConcept"`
+}
+
+// Quantity is a number with its unit, like 7.8 %.
+type Quantity struct {
+	Value *float64 `json:"value"`
+	Unit  string   `json:"unit"`
+	Code  string   `json:"code"` // the unit as a code, e.g. "mm[Hg]"
+}
+
+// UnitName is the readable unit, or the unit code when that's all there is.
+func (q Quantity) UnitName() string {
+	if q.Unit != "" {
+		return q.Unit
+	}
+	return q.Code
+}
+
+// Component is one part of a multi-part result, like systolic blood pressure.
+type Component struct {
+	Code CodeableConcept `json:"code"`
+	Value
+}
+
+type Observation struct {
+	Status            string          `json:"status"`
+	Code              CodeableConcept `json:"code"`
+	EffectiveDateTime string          `json:"effectiveDateTime"`
+	EffectivePeriod   Period          `json:"effectivePeriod"`
+	Issued            string          `json:"issued"`
+	Meta              Meta            `json:"meta"`
+	Value                             // the single result, if there is one
+	Component         []Component     `json:"component"`
+}
+
+type Condition struct {
+	Code               CodeableConcept `json:"code"`
+	ClinicalStatus     CodeableConcept `json:"clinicalStatus"`
+	VerificationStatus CodeableConcept `json:"verificationStatus"`
+	OnsetDateTime      string          `json:"onsetDateTime"`
+}
+
+type MedicationRequest struct {
+	Status                    string          `json:"status"`
+	Intent                    string          `json:"intent"`
+	MedicationCodeableConcept CodeableConcept `json:"medicationCodeableConcept"`
+	MedicationReference       any             `json:"medicationReference"` // a link to a Medication record, not supported yet
+	AuthoredOn                string          `json:"authoredOn"`
+	DosageInstruction         []struct {
+		Text string `json:"text"`
+	} `json:"dosageInstruction"`
+}
+
+type Procedure struct {
+	Status            string          `json:"status"`
+	Code              CodeableConcept `json:"code"`
+	PerformedDateTime string          `json:"performedDateTime"`
+	PerformedPeriod   Period          `json:"performedPeriod"`
+	Performer         []struct {
+		Actor Reference `json:"actor"`
+	} `json:"performer"`
+}
+
+type Attachment struct {
+	ContentType string  `json:"contentType"`
+	URL         string  `json:"url"`
+	Data        *string `json:"data"` // nil when missing
+}
+
+type DocumentReference struct {
+	Status  string          `json:"status"`
+	Type    CodeableConcept `json:"type"`
+	Date    string          `json:"date"`
+	Author  []Reference     `json:"author"`
+	Content []struct {
+		Attachment Attachment `json:"attachment"`
+	} `json:"content"`
+}
+
+type Binary struct {
+	ContentType string `json:"contentType"`
+	Data        string `json:"data"`
+}

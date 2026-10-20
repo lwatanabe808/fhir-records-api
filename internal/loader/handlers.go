@@ -3,6 +3,7 @@ package loader
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/lwatanabe808/novellia-fhir-api/internal/fhir"
@@ -63,43 +64,46 @@ func removeDocument(tx *sql.Tx, id string) error {
 // ---------- Patient ----------
 
 func insertPatient(rec *recordCtx) error {
-	r := rec.r
+	var p fhir.Patient
+	rec.decode(&p)
+
 	// FHIR permits name parts, plain text, or both:
 	// {given: [string, string], family: string}
 	// {text: string}
-	family := fhir.Str(r, "name", 0, "family")
-	var given []string
-	// given names are first and middle names as a slice.
-	for _, g := range fhir.List(r, "name", 0, "given") {
-		if s, ok := g.(string); ok {
-			given = append(given, s)
+	var name fhir.HumanName
+	if len(p.Name) > 0 {
+		name = p.Name[0]
+	}
+	var given []string // first and middle names
+	for _, g := range name.Given {
+		if g != "" {
+			given = append(given, g)
 		}
 	}
 	givenNames := strings.Join(given, " ")
 	// text is the full name as it should be displayed (FHIR's definition), so use it
 	// first, and build the name from the parts only when it's missing.
-	fullName := fhir.Str(r, "name", 0, "text")
+	fullName := name.Text
 	if fullName == "" {
-		fullName = strings.TrimSpace(givenNames + " " + family)
+		fullName = strings.TrimSpace(givenNames + " " + name.Family)
 	}
-	birthDate, err := rec.date("birthDate")
+
+	birthDate, err := rec.date("birthDate", p.BirthDate)
 	if err != nil {
 		return err
 	}
-	deceased, err := rec.date("deceasedDateTime")
+	deceased, err := rec.date("deceasedDateTime", p.DeceasedDateTime)
 	if err != nil {
 		return err
 	}
-	// if not allowed, set to ""
-	gender := allowed(fhir.Str(r, "gender"), "male", "female", "other", "unknown")
-	var active any
-	if b, ok := r["active"].(bool); ok {
-		active = b
+	gender := allowed(p.Gender, "male", "female", "other", "unknown")
+	if rec.flagged["active"] {
+		p.Active = nil // wrong type: Go's decoder may have left false here
 	}
 
 	// SSN: only a keyed hash is kept, and only for numbers that could be real.
 	var ssnHash string
-	if digits, found, problem := patientSSN(r); found && problem != "" {
+	if digits, found, problem := patientSSN(p.Identifier); found && problem != "" {
 		if err := rec.issue(InvalidSSN, Warning, "identifier", "SSN "+problem, "not used for matching"); err != nil {
 			return err
 		}
@@ -110,8 +114,7 @@ func insertPatient(rec *recordCtx) error {
 	return rec.l.exec(`INSERT INTO patients (id, raw_resource_id, full_name, family_name, given_names, gender, birth_date,
 			deceased_date, active, name_key, ssn_hash, person_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.id, rec.line, fullName, family, givenNames,
-		gender, birthDate, deceased, active,
+		rec.id, rec.line, fullName, name.Family, givenNames, gender, birthDate, deceased, p.Active,
 		nameKey(fullName), ssnHash, rec.id)
 }
 
@@ -133,7 +136,7 @@ var observationStatuses = []string{"registered", "preliminary", "final", "amende
 // These are the supported "value" fields per FHIR.
 // FHIR allows only one value[x] per Observation. If a record has several,
 // we keep the first one in this fixed order (Go maps don't keep JSON key order).
-var valueFields = []string{"valueQuantity", "valueString", "valueCodeableConcept", "valueBoolean", "valueInteger",
+var allowedValueFields = []string{"valueQuantity", "valueString", "valueCodeableConcept", "valueBoolean", "valueInteger",
 	"valueRange", "valueRatio", "valueSampledData", "valueTime", "valueDateTime", "valuePeriod"}
 
 type obsValue struct {
@@ -143,77 +146,57 @@ type obsValue struct {
 }
 
 func insertObservation(rec *recordCtx) error {
-	r := rec.r
+	r := rec.r // the raw record, for the value fields
+	var o fhir.Observation
+	rec.decode(&o)
+
 	patientRef, err := rec.patientRef()
 	if err != nil {
 		return err
 	}
-	code, err := rec.code("code", "lab test code")
+	code, err := rec.code("code", "lab test code", o.Code)
 	if err != nil {
 		return err
 	}
-	measuredAt, err := rec.dateOrStart("effectiveDateTime", "effectivePeriod")
+	// FHIR allows a time (effectiveDateTime) or a period (effectivePeriod).
+	measuredAt, err := rec.date("effectiveDateTime", o.EffectiveDateTime)
 	if err != nil {
 		return err
 	}
-	lastUpdated, _ := rec.date("meta", "lastUpdated")
-	issued, err := rec.date("issued")
-	if err != nil {
-		return err
-	}
-	status := allowed(fhir.Str(r, "status"), observationStatuses...)
-
-	// The main value.
-	present := presentValueFields(r)
-	var main obsValue
-	if len(present) > 1 {
-		if err := rec.issue(MultipleValues, Warning, strings.Join(present, ", "),
-			"FHIR allows one value per observation", "kept "+present[0]); err != nil {
+	if measuredAt == "" {
+		if measuredAt, err = rec.date("effectivePeriod/start", o.EffectivePeriod.Start); err != nil {
 			return err
 		}
 	}
-	if len(present) > 0 {
-		if main, err = rec.readValue(r, present[0], present[0]); err != nil {
-			return err
-		}
+	lastUpdated, _ := rec.date("meta/lastUpdated", o.Meta.LastUpdated)
+	issued, err := rec.date("issued", o.Issued)
+	if err != nil {
+		return err
+	}
+	status := allowed(o.Status, observationStatuses...)
+
+	// Values can be in the parent (main) or nested (component)
+	main, hasMainValue, err := rec.readFirstValue(r, o.Value, "")
+	if err != nil {
+		return err
 	}
 
-	//
-	components := fhir.List(r, "component")
-	_, hasAbsentReason := r["dataAbsentReason"]
-	if len(present) == 0 && len(components) == 0 && !hasAbsentReason {
+	if !hasMainValue && len(o.Component) == 0 {
 		if err := rec.issue(MissingValue, Warning, "value", "observation has no value and no components", "value stored as null"); err != nil {
 			return err
 		}
 	}
 
-	// Impossible and implausible values.
-	impossible, implausible := false, false
-	check := func(c, label string, v obsValue) error {
-		if v.value == nil {
-			return nil
-		}
-		if reason := validate.CheckImpossible(*v.value, v.unit); reason != "" {
-			impossible = true
-			return rec.issue(ImpossibleValue, Error, label, reason, "hidden from default views and research")
-		}
-		if reason := rec.l.cfg.Ranges.CheckImplausible(c, *v.value, v.unit); reason != "" {
-			implausible = true
-			return rec.issue(ImplausibleValue, Warning, label, reason+" (placeholder range, needs clinical review)", "shown with a warning, excluded from research")
-		}
-		return nil
-	}
-	if err := check(code.Code, "value", main); err != nil {
+	// Can the value be real? Is the date in the future?
+	impossible, err := rec.checkValue("value", main)
+	if err != nil {
 		return err
 	}
-	if measuredAt != "" {
-		if _, t, ok := fhir.ParseDate(measuredAt); ok && t.After(rec.l.cfg.Now()) {
-			impossible = true
-			if err := rec.issue(ImpossibleValue, Error, "effectiveDateTime", "measurement is dated in the future", "hidden from default views and research"); err != nil {
-				return err
-			}
-		}
+	future, err := rec.checkFutureDate(measuredAt)
+	if err != nil {
+		return err
 	}
+	impossible = impossible || future
 
 	// Components, e.g. the systolic and diastolic parts of a blood pressure.
 	// They are checked before anything is saved, so the flags are final.
@@ -222,45 +205,30 @@ func insertObservation(rec *recordCtx) error {
 		value  obsValue
 	}
 	var comps []component
-	var systolic, diastolic *float64
-	for i, comp := range components {
-		c := fhir.FirstCoding(fhir.Get(comp, "code"))
+	for i, comp := range o.Component {
 		label := fmt.Sprintf("component/%d", i) // same path format as the schema check
-		var v obsValue
-		if fields := presentValueFields(comp); len(fields) > 0 {
-			if v, err = rec.readValue(comp, fields[0], label+"/"+fields[0]); err != nil {
-				return err
-			}
-		}
-		if err := check(c.Code, label, v); err != nil {
+		v, _, err := rec.readFirstValue(fhir.Get(r, "component", i), comp.Value, label)
+		if err != nil {
 			return err
 		}
-		switch c.Code {
-		case "8480-6":
-			systolic = v.value
-		case "8462-4":
-			diastolic = v.value
-		}
-		comps = append(comps, component{c, v})
-	}
-	if systolic != nil && diastolic != nil && *systolic <= *diastolic {
-		impossible = true
-		if err := rec.issue(ImpossibleValue, Error, "component",
-			fmt.Sprintf("systolic %v is not higher than diastolic %v", *systolic, *diastolic), "hidden from default views and research"); err != nil {
+		partImpossible, err := rec.checkValue(label, v)
+		if err != nil {
 			return err
 		}
+		impossible = impossible || partImpossible
+		comps = append(comps, component{comp.Code.First(), v})
 	}
 
 	if err := rec.l.exec(`INSERT INTO observations (id, raw_resource_id, patient_ref, code_system, lab_test_code, name, label,
-			status, measured_at, last_updated, issued, is_impossible, is_implausible)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			status, measured_at, last_updated, issued, is_impossible)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.id, rec.line, patientRef, code.System, code.Code, code.Display, code.Text, status, measuredAt,
-		lastUpdated, issued, impossible, implausible); err != nil {
+		lastUpdated, issued, impossible); err != nil {
 		return err
 	}
 
-	// The values: the single result if there is one, then each component.
-	if len(present) > 0 {
+	// Save main and component values to values table
+	if hasMainValue {
 		if err := saveValue(rec, false, code, main); err != nil {
 			return err
 		}
@@ -280,53 +248,100 @@ func saveValue(rec *recordCtx, isComponent bool, coding fhir.Coding, v obsValue)
 		rec.id, isComponent, coding.System, coding.Code, coding.Name(), v.value, v.valueText, v.unit)
 }
 
-// presentValueFields lists the value[x] fields an observation or component has,
-// in valueFields order.
-func presentValueFields(obj any) []string {
-	m, _ := obj.(map[string]any)
-	var present []string
-	for _, f := range valueFields {
-		if _, ok := m[f]; ok {
-			present = append(present, f)
-		}
+// checkValue flags a number that can't be real, like a negative weight.
+func (rec *recordCtx) checkValue(field string, v obsValue) (impossible bool, err error) {
+	if v.value == nil {
+		return false, nil
 	}
-	return present
+	if reason := validate.CheckImpossible(*v.value, v.unit); reason != "" {
+		return true, rec.issue(ImpossibleValue, Error, field, reason, "hidden from default views and research")
+	}
+	return false, nil
 }
 
-// readValue reads one value[x] field from an observation or component.
-func (rec *recordCtx) readValue(obj any, field, label string) (obsValue, error) {
+// checkFutureDate flags a measurement dated after today, which can't be real.
+func (rec *recordCtx) checkFutureDate(measuredAt string) (future bool, err error) {
+	_, t, ok := fhir.ParseDate(measuredAt)
+	if !ok || !t.After(rec.l.cfg.Now()) {
+		return false, nil
+	}
+	return true, rec.issue(ImpossibleValue, Error, "effectiveDateTime", "measurement is dated in the future", "hidden from default views and research")
+}
+
+// readFirstValue reads the value of an observation (label "") or of one of its
+// components (label "component/0"). found is false when there is no value.
+// FHIR allows one value; if there are several, it reports that and keeps the first.
+// raw is the same observation or component as a loose map, used to see which
+// value fields it has (a struct can't tell a missing field from an empty one).
+func (rec *recordCtx) readFirstValue(raw any, val fhir.Value, label string) (v obsValue, found bool, err error) {
+	fields := valueFields(raw)
+	if len(fields) == 0 {
+		return v, false, nil
+	}
+	if len(fields) > 1 {
+		if err := rec.issue(MultipleValues, Warning, joinSlash(label, strings.Join(fields, ", ")),
+			"FHIR allows one value", "kept "+fields[0]); err != nil {
+			return v, true, err
+		}
+	}
+	v, err = rec.readValue(val, fields[0], joinSlash(label, fields[0]))
+	return v, true, err
+}
+
+// valueFields lists the value fields an observation or component has,
+// in allowedValueFields order.
+func valueFields(obj any) []string {
+	m, _ := obj.(map[string]any)
+	var fields []string
+	for _, f := range allowedValueFields {
+		if _, ok := m[f]; ok {
+			fields = append(fields, f)
+		}
+	}
+	return fields
+}
+
+// joinSlash builds a field path like the schema check does: "component/0" + "valueQuantity".
+func joinSlash(path, field string) string {
+	if path == "" {
+		return field
+	}
+	return path + "/" + field
+}
+
+// for each observation, when we read the observation, we only take the
+// first value
+func (rec *recordCtx) readValue(val fhir.Value, field, path string) (obsValue, error) {
 	var v obsValue
-	raw := fhir.Get(obj, field)
+	// values flagged by schema check
+	if rec.flagged[path] {
+		return v, nil
+	}
 	switch field {
+	// valueQuantity typically has value and unit
 	case "valueQuantity":
-		if n, ok := fhir.Num(raw, "value"); ok {
-			v.value = &n
-		} else if fhir.Get(raw, "value") != nil && !rec.flagged[label+"/value"] {
-			if err := rec.issue(InvalidValueType, Warning, label+".value", "value is not a number", "value stored as null"); err != nil {
-				return v, err
-			}
+		q := val.ValueQuantity
+		if q == nil || rec.flagged[path+"/value"] {
+			break // no number, or not a number (already reported by the schema check)
 		}
-		v.unit = fhir.Str(raw, "unit")
-		if v.unit == "" {
-			v.unit = fhir.Str(raw, "code")
-		}
-		if v.unit == "" && v.value != nil {
-			if err := rec.issue(MissingUnit, Warning, label+".unit", "number has no unit", "unit stored as null"); err != nil {
-				return v, err
-			}
+		v.value, v.unit = q.Value, q.UnitName()
+		if v.value != nil && v.unit == "" {
+			return v, rec.issue(MissingUnit, Warning, path+".unit", "number has no unit", "unit stored as null")
 		}
 	case "valueInteger":
-		if n, ok := raw.(float64); ok {
-			v.value = &n
-		}
+		v.value = val.ValueInteger
 	case "valueString":
-		v.valueText, _ = raw.(string)
+		if val.ValueString != nil {
+			v.valueText = *val.ValueString
+		}
 	case "valueBoolean":
-		if b, ok := raw.(bool); ok {
-			v.valueText = fmt.Sprint(b)
+		if val.ValueBoolean != nil {
+			v.valueText = strconv.FormatBool(*val.ValueBoolean)
 		}
 	case "valueCodeableConcept":
-		v.valueText = fhir.FirstCoding(raw).Name()
+		if val.ValueCodeableConcept != nil {
+			v.valueText = val.ValueCodeableConcept.First().Name()
+		}
 	}
 	return v, nil
 }
@@ -334,21 +349,23 @@ func (rec *recordCtx) readValue(obj any, field, label string) (obsValue, error) 
 // ---------- Condition ----------
 
 func insertCondition(rec *recordCtx) error {
-	r := rec.r
+	var c fhir.Condition
+	rec.decode(&c)
+
 	patientRef, err := rec.patientRef()
 	if err != nil {
 		return err
 	}
-	code, err := rec.code("code", "disease code")
+	code, err := rec.code("code", "disease code", c.Code)
 	if err != nil {
 		return err
 	}
-	onset, err := rec.date("onsetDateTime")
+	onset, err := rec.date("onsetDateTime", c.OnsetDateTime)
 	if err != nil {
 		return err
 	}
-	clinical := allowed(fhir.CodeOnly(r["clinicalStatus"]), "active", "recurrence", "relapse", "inactive", "remission", "resolved")
-	verification := allowed(fhir.CodeOnly(r["verificationStatus"]), "unconfirmed", "provisional", "differential", "confirmed", "refuted", "entered-in-error")
+	clinical := allowed(c.ClinicalStatus.First().Code, "active", "recurrence", "relapse", "inactive", "remission", "resolved")
+	verification := allowed(c.VerificationStatus.First().Code, "unconfirmed", "provisional", "differential", "confirmed", "refuted", "entered-in-error")
 	return rec.l.exec(`INSERT INTO conditions (id, raw_resource_id, patient_ref, code_system, disease_code, name, label,
 			clinical_status, verification_status, onset_date)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -359,32 +376,34 @@ func insertCondition(rec *recordCtx) error {
 // ---------- MedicationRequest ----------
 
 func insertMedication(rec *recordCtx) error {
-	r := rec.r
+	var m fhir.MedicationRequest
+	rec.decode(&m)
+
 	patientRef, err := rec.patientRef()
 	if err != nil {
 		return err
 	}
 	var code fhir.Coding
-	if _, ok := r["medicationReference"]; ok {
+	if m.MedicationReference != nil {
 		if err := rec.issue(MissingCode, Warning, "medicationReference",
 			"drug is a link to a Medication record, which is not supported yet", "drug code stored as null"); err != nil {
 			return err
 		}
-	} else if code, err = rec.code("medicationCodeableConcept", "drug code"); err != nil {
+	} else if code, err = rec.code("medicationCodeableConcept", "drug code", m.MedicationCodeableConcept); err != nil {
 		return err
 	}
-	prescribedAt, err := rec.date("authoredOn")
+	prescribedAt, err := rec.date("authoredOn", m.AuthoredOn)
 	if err != nil {
 		return err
 	}
 	var dosage []string
-	for _, d := range fhir.List(r, "dosageInstruction") {
-		if t := fhir.Str(d, "text"); t != "" {
-			dosage = append(dosage, t)
+	for _, d := range m.DosageInstruction {
+		if d.Text != "" {
+			dosage = append(dosage, d.Text)
 		}
 	}
-	status := allowed(fhir.Str(r, "status"), "active", "on-hold", "cancelled", "completed", "entered-in-error", "stopped", "draft", "unknown")
-	intent := allowed(fhir.Str(r, "intent"), "proposal", "plan", "order", "original-order", "reflex-order", "filler-order", "instance-order", "option")
+	status := allowed(m.Status, "active", "on-hold", "cancelled", "completed", "entered-in-error", "stopped", "draft", "unknown")
+	intent := allowed(m.Intent, "proposal", "plan", "order", "original-order", "reflex-order", "filler-order", "instance-order", "option")
 	return rec.l.exec(`INSERT INTO medications (id, raw_resource_id, patient_ref, code_system, drug_code, name, label,
 			status, intent, prescribed_at, dosage)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -396,21 +415,32 @@ func insertMedication(rec *recordCtx) error {
 // ---------- Procedure ----------
 
 func insertProcedure(rec *recordCtx) error {
-	r := rec.r
+	var p fhir.Procedure
+	rec.decode(&p)
+
 	patientRef, err := rec.patientRef()
 	if err != nil {
 		return err
 	}
-	code, err := rec.code("code", "procedure code")
+	code, err := rec.code("code", "procedure code", p.Code)
 	if err != nil {
 		return err
 	}
-	performedAt, err := rec.dateOrStart("performedDateTime", "performedPeriod")
+	// FHIR allows a time (performedDateTime) or a period (performedPeriod).
+	performedAt, err := rec.date("performedDateTime", p.PerformedDateTime)
 	if err != nil {
 		return err
 	}
-	performer := fhir.Str(r, "performer", 0, "actor", "reference")
-	status := allowed(fhir.Str(r, "status"), "preparation", "in-progress", "not-done", "on-hold", "stopped", "completed", "entered-in-error", "unknown")
+	if performedAt == "" {
+		if performedAt, err = rec.date("performedPeriod/start", p.PerformedPeriod.Start); err != nil {
+			return err
+		}
+	}
+	var performer string
+	if len(p.Performer) > 0 {
+		performer = p.Performer[0].Actor.Reference
+	}
+	status := allowed(p.Status, "preparation", "in-progress", "not-done", "on-hold", "stopped", "completed", "entered-in-error", "unknown")
 	return rec.l.exec(`INSERT INTO procedures (id, raw_resource_id, patient_ref, code_system, procedure_code, name, label,
 			status, performed_at, performer)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

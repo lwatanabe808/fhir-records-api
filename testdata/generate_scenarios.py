@@ -216,9 +216,9 @@ write("10-attachments.jsonl", [
 write("11-values.jsonl", [
     patient("pt-1100", ["Val"], "Ues", "1990-09-09"),
     obs("ob-1100", "pt-1100", GLUCOSE, "2025-01-01T08:00:00Z", 6.1, "mmol/L"),       # other unit: kept as is
-    obs("ob-1101", "pt-1100", GLUCOSE, "2025-01-02T08:00:00Z", 0, "mg/dL"),          # zero: implausible
+    obs("ob-1101", "pt-1100", GLUCOSE, "2025-01-02T08:00:00Z", 0, "mg/dL"),          # zero
     obs("ob-1102", "pt-1100", WEIGHT, "2025-01-03T08:00:00Z", -5, "kg"),             # negative: impossible
-    obs("ob-1103", "pt-1100", WEIGHT, "2025-01-04T08:00:00Z", 1e9, "kg"),            # huge: implausible
+    obs("ob-1103", "pt-1100", WEIGHT, "2025-01-04T08:00:00Z", 1e9, "kg"),            # huge
     {**obs("ob-1104", "pt-1100", WEIGHT, "2025-01-05T08:00:00Z"), "valueQuantity": {"value": True, "unit": "kg"}},
     {**obs("ob-1105", "pt-1100", WEIGHT, "2025-01-06T08:00:00Z"), "valueQuantity": {"value": None, "unit": "kg"}},
     {**obs("ob-1106", "pt-1100", loinc("8302-2", "Body height"), "2025-01-07T08:00:00Z"), "valueInteger": 170},

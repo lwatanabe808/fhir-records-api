@@ -1,6 +1,7 @@
 package loader
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -20,6 +21,13 @@ type recordCtx struct {
 	// flagged holds fields the schema check already reported, so the type's
 	// own rules don't report the same problem twice.
 	flagged map[string]bool
+}
+
+// decode fills a record struct (fhir.Patient, fhir.Observation...) from the line
+// in one step. If a field has the wrong type, Go leaves it empty and fills in
+// the rest; the schema check has already reported that field, so the error is ignored.
+func (rec *recordCtx) decode(v any) {
+	_ = json.Unmarshal(rec.raw, v)
 }
 
 func (rec *recordCtx) issue(issueType, severity, field, detail, action string) error {
@@ -62,12 +70,11 @@ func (rec *recordCtx) patientRef() (string, error) {
 	return ref, nil
 }
 
-// code reads a CodeableConcept (a lab test, disease, procedure or drug code)
+// code checks a CodeableConcept (a lab test, disease, procedure or drug code)
 // and reports a missing code or a missing code system.
-func (rec *recordCtx) code(field, what string) (fhir.Coding, error) {
-	concept, present := rec.r[field]
-	c := fhir.FirstCoding(concept)
-	if !present || c.Code == "" {
+func (rec *recordCtx) code(field, what string, concept fhir.CodeableConcept) (fhir.Coding, error) {
+	c := concept.First()
+	if c.Code == "" {
 		detail := fmt.Sprintf("no %s", what)
 		if c.Text != "" {
 			detail += fmt.Sprintf(" (only the label %q)", c.Text)
@@ -81,10 +88,10 @@ func (rec *recordCtx) code(field, what string) (fhir.Coding, error) {
 	return c, nil
 }
 
-// date reads a date or dateTime field. Invalid dates become "".
+// date checks a date or dateTime value. Invalid dates become "".
 // The schema check usually reports them; this catches the rest (like Feb 30).
-func (rec *recordCtx) date(path ...any) (string, error) {
-	raw := fhir.Str(rec.r, path...)
+// field is the value's path in the record, e.g. "birthDate" or "effectivePeriod/start".
+func (rec *recordCtx) date(field, raw string) (string, error) {
 	if raw == "" {
 		return "", nil
 	}
@@ -92,7 +99,6 @@ func (rec *recordCtx) date(path ...any) (string, error) {
 	if ok {
 		return normalized, nil
 	}
-	field := pathString(path)
 	if rec.flagged[field] {
 		return "", nil
 	}
@@ -100,16 +106,6 @@ func (rec *recordCtx) date(path ...any) (string, error) {
 }
 
 // allowed returns the value if it is in the allowed set, otherwise "".
-// dateOrStart reads a dateTime field, or the start of a period field when the
-// dateTime is missing (FHIR allows either, e.g. effectiveDateTime or effectivePeriod).
-func (rec *recordCtx) dateOrStart(dateField, periodField string) (string, error) {
-	d, err := rec.date(dateField)
-	if err != nil || d != "" {
-		return d, err
-	}
-	return rec.date(periodField, "start")
-}
-
 // Invalid statuses are reported by the schema check; here we only keep them out of the clean table.
 func allowed(value string, set ...string) string {
 	for _, s := range set {
@@ -149,20 +145,4 @@ func joinPath(path, field string) string {
 		return field
 	}
 	return path + "." + field
-}
-
-func pathString(path []any) string {
-	s := ""
-	for _, p := range path {
-		switch v := p.(type) {
-		case string:
-			if s != "" {
-				s += "/"
-			}
-			s += v
-		case int:
-			s += fmt.Sprintf("/%d", v)
-		}
-	}
-	return s
 }
