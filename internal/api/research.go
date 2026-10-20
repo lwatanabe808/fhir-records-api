@@ -95,10 +95,10 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 	if paramError(w, err) {
 		return
 	}
-	condition, medication, procedure, lab := q.Get("condition"), q.Get("medication"), q.Get("procedure"), labShortcut(q.Get("lab"))
+	condition, medication, procedure, lab := q.Get("condition"), q.Get("medication"), q.Get("procedure"), q.Get("lab")
 	excludeCondition, excludeMedication, excludeProcedure := q.Get("excludeCondition"), q.Get("excludeMedication"), q.Get("excludeProcedure")
 	if (labMin != nil || labMax != nil) && lab == "" {
-		writeError(w, http.StatusBadRequest, "INVALID_PARAMETER", "labMin and labMax need lab, e.g. lab=a1c or lab=4548-4")
+		writeError(w, http.StatusBadRequest, "INVALID_PARAMETER", "labMin and labMax need lab, e.g. lab=4548-4 (A1c)")
 		return
 	}
 	if minAge > maxAge {

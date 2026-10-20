@@ -29,7 +29,7 @@ sqlite3 -header -column db/novellia.db "SELECT * FROM issues"
 **Try it:**
 ```bash
 make demo              # calls every endpoint with cURL
-curl -s localhost:8080/patients/noah-wyle/observations?code=a1c
+curl -s localhost:8080/patients/noah-wyle/observations?code=4548-4
 ```
 
 **Use your own data file:**
@@ -72,12 +72,12 @@ make test
 | `GET /patients/{id}` | One patient. Ids work in any capitalization (FHIR ids are case-insensitive). |
 | `GET /patients/{id}/conditions?status=` | Diagnoses |
 | `GET /patients/{id}/medications?status=` | Prescriptions |
-| `GET /patients/{id}/observations?code=&from=&to=` | Labs and vitals. `code` takes a LOINC code or a shortcut like `a1c`, `oxygen`, `blood-pressure`. Blood pressure comes back split into systolic and diastolic. |
+| `GET /patients/{id}/observations?code=&from=&to=` | Labs and vitals. `code` takes a LOINC code, like `4548-4` for A1c. Blood pressure comes back split into systolic and diastolic. |
 | `GET /patients/{id}/procedures` | Procedures |
 | `GET /patients/{id}/notes` | Notes with decoded text, or the reason text isn't available |
 | `GET /patients/{id}/timeline` | Every record in one list, newest first |
 
-Every list item has a `warnings` field listing problems found in that record. Records that shouldn't count as real data are hidden by default: entered in error, replaced by a correction, non-primary duplicates, and impossible values. Add `includeHidden=true` to see them, with a `hiddenBecause` reason.
+Every list item has a `warnings` field listing problems found in that record. Records that shouldn't count as real data are never shown in the patient app: entered in error, replaced by a correction, extra duplicates, and impossible values. They stay in the database, and `/data-quality/issues` lists each one with the reason.
 
 ### Research partners (B2B)
 | Endpoint | What it returns |
@@ -101,7 +101,7 @@ Every error uses the same shape: `{"error": {"code": "INVALID_PARAMETER", "messa
 
 ## The extra capability: cohort search
 
-`/research/cohort` answers the question research partners ask: "how many patients like this do you have, and what does their history look like?" For example, `condition=diabetes&lab=a1c&labMin=7` finds patients with type 2 diabetes whose latest A1c is 7 or higher.
+`/research/cohort` answers the question research partners ask: "how many patients like this do you have, and what does their history look like?" For example, `condition=diabetes&lab=4548-4&labMin=7` finds patients with type 2 diabetes whose latest A1c is 7 or higher.
 
 Partners describe the patients they need as **inclusion and exclusion criteria**, so both are supported: `condition=diabetes&excludeCondition=heart failure&procedure=colonoscopy`.
 
@@ -190,7 +190,7 @@ Each case below is covered by a test in [internal/loader/loader_test.go](interna
 | 18 | More than one value in an Observation | Own check | Keep the first, in a fixed order | `MULTIPLE_VALUES` | warning |
 | 19 | Number with no unit | Own check | Unit null | `MISSING_UNIT` | warning |
 | 20 | Empty list (e.g. dosage) | Own check (the schema allows it) | Stored as null | `EMPTY_LIST` | warning |
-| 21 | Impossible value: negative, over 100%, dated in the future | Own check | Hidden by default, excluded from research | `IMPOSSIBLE_VALUE` | error |
+| 21 | Impossible value: negative, over 100%, dated in the future | Own check | Hidden from the patient app, excluded from research | `IMPOSSIBLE_VALUE` | error |
 | 23 | Unexpected error in my code on one record | Recover | Keep going | `PROCESSING_ERROR` | error |
 | **Binaries and attachments** |||||
 | 24 | Inline attachment (`data` in the note) | Own check | Normal case: stored in `binaries` with a generated id | none | |
@@ -218,7 +218,7 @@ Each case below is covered by a test in [internal/loader/loader_test.go](interna
 
 | # | Case | How it's known | Handling |
 |---|---|---|---|
-| 44 | Entered in error | `status: "entered-in-error"` | Hidden by default, excluded from research |
+| 44 | Entered in error | `status: "entered-in-error"` | Hidden from the patient app, excluded from research |
 | 45 | Refuted diagnosis | `verificationStatus: "refuted"` | Excluded from research |
 | 46 | Code and label name different things (e.g. `proc-ti-001`: bypass code, "Cardiac Catheterization" label) | A decision, not a check | Both stored and returned, searches use the code |
 
@@ -254,7 +254,7 @@ Besides the sample file, [testdata/scenarios](testdata/scenarios) has input file
 - **Capital letters are the one exception,** because the FHIR spec says ids are case-insensitive. Even then it only links when exactly one patient matches.
 - **The same person from two clinics.** Patients with the same name (ignoring case, accents and punctuation) and birth date are flagged as possible duplicates. They are never combined on the patient chart, because a wrong merge shows one person's health data to another. In research they count once, so a person is never counted twice. Every count shows `countWithoutDuplicates`, `countIncludingPossibleDuplicates` and `possibleDuplicatePatients`.
 - **SSNs are never used or returned.** The original record is kept as received, so every endpoint that returns raw JSON replaces any SSN with `[redacted]`.
-- **Duplicates are flagged, never deleted.** The clean view shows one primary record with a warning, and the others are one parameter away.
+- **Duplicates are flagged, never deleted.** The patient app shows one primary record with a warning; the others stay in the database and are listed in `/data-quality/issues`.
 - **Medical meaning is not judged.** The API checks structure and consistency. Whether a label like "History of MI" fits an active status, or whether a code and its label describe the same thing, needs clinical judgment.
 - **Logs skip query strings,** because they can contain health details.
 

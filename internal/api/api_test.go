@@ -87,17 +87,11 @@ func TestHiddenObservations(t *testing.T) {
 			t.Errorf("%s should be visible", id)
 		}
 	}
-	all := get(t, h, "/patients/p1/observations?includeHidden=true", http.StatusOK)
-	for _, id := range []string{"o-g2", "o-orig", "o-o2", "o-eie"} {
-		if !strings.Contains(all, `"`+id+`"`) {
-			t.Errorf("%s should appear with includeHidden=true", id)
-		}
-	}
 }
 
 func TestCohortIsDeidentified(t *testing.T) {
 	h := newTestServer(t, "../../data/fhir-resources.jsonl")
-	body := get(t, h, "/research/cohort?condition=diabetes&lab=a1c&labMin=7", http.StatusOK)
+	body := get(t, h, "/research/cohort?condition=diabetes&lab=4548-4&labMin=7", http.StatusOK)
 	var resp struct {
 		Count    int              `json:"countWithoutDuplicates"`
 		Patients []map[string]any `json:"patients"`

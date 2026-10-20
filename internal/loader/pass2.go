@@ -282,7 +282,7 @@ func (l *Loader) groupObservations() error {
 //     If there are several, the lowest id wins.
 //   - Otherwise the lowest id is shown, and the others are hidden as duplicates.
 //
-// Nothing is deleted: hidden readings stay in the table, and ?includeHidden=true shows them.
+// Nothing is deleted: hidden readings stay in the table, and /data-quality/issues lists them.
 func (l *Loader) resolveGroup(groupKey string, members []obsRow) error {
 	keep := members[0]
 	for _, m := range members {
