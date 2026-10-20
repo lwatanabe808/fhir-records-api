@@ -39,7 +39,7 @@ func (s *Server) researchID(patientID string) string {
 
 // deidentifiedAge returns the age, with everyone over 89 grouped as "90+".
 func deidentifiedAge(birthDate string, now time.Time) any {
-	age, ok := ageOn(birthDate, now).(int)
+	age, ok := ageOn(birthDate, now)
 	if !ok {
 		return nil
 	}
@@ -167,7 +167,7 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 	var matched []candidate
 	for _, c := range candidates {
 		if minAge > 0 || maxAge < 150 {
-			age, ok := ageOn(c.birth.String, now).(int)
+			age, ok := ageOn(c.birth.String, now)
 			if !ok || age < minAge || age > maxAge {
 				continue
 			}

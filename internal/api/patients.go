@@ -1,7 +1,6 @@
 package api
 
 import (
-	"database/sql"
 	"fmt"
 	"net/http"
 	"slices"
@@ -11,144 +10,27 @@ import (
 )
 
 // Endpoints for the patient app: one person looking at their own records.
+//
 // Default views hide records that shouldn't count as real data (entered in
 // error, replaced by a correction, duplicates, impossible values).
-// ?includeHidden=true shows everything, with the reason it would be hidden.
+// ?includeHidden=true shows everything.
+//
+// Each response is a small struct. A *string field is JSON null when the
+// database value is NULL.
 
 // visibleObservation matches what the default observation views show.
 const visibleObservation = `is_primary = 1 AND replaced_by IS NULL AND is_impossible = 0
 	AND coalesce(status, '') NOT IN ('entered-in-error', 'cancelled')`
 
-// resolvePatient finds the patient for {id}. Ids work in any capitalization,
-// as long as only one patient matches. It writes a 404 and returns "" otherwise.
-func (s *Server) resolvePatient(w http.ResponseWriter, r *http.Request) string {
-	id := r.PathValue("id")
-	matches, err := s.stringList(`SELECT id FROM patients WHERE lower(id) = lower(?)`, id)
-	if err != nil {
-		serverError(w, err)
-		return ""
-	}
-	if slices.Contains(matches, id) {
-		return id
-	}
-	if len(matches) == 1 {
-		return matches[0]
-	}
-	writeError(w, http.StatusNotFound, "PATIENT_NOT_FOUND", "no patient with id "+id)
-	return ""
-}
-
-// stringList runs a query that returns one text column and collects the values.
-func (s *Server) stringList(query string, args ...any) ([]string, error) {
-	rows, err := s.db.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var v string
-		if err := rows.Scan(&v); err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
-}
-
-// recordList is the query for one of a patient's record lists (conditions,
-// medications, observations, procedures, notes), built up filter by filter.
-type recordList struct {
-	query         string
-	args          []any
-	includeHidden bool // ?includeHidden=true
-}
-
-// newRecordList reads what every record list needs: the patient and
-// ?includeHidden. ok is false when an error response was already written.
-func (s *Server) newRecordList(w http.ResponseWriter, r *http.Request, selectFrom string) (list *recordList, ok bool) {
-	id := s.resolvePatient(w, r)
-	if id == "" {
-		return nil, false
-	}
-	includeHidden, err := boolParam(r, "includeHidden")
-	if paramError(w, err) {
-		return nil, false
-	}
-	return &recordList{query: selectFrom + ` WHERE patient_id = ?`, args: []any{id}, includeHidden: includeHidden}, true
-}
-
-// where adds one filter to the query.
-func (l *recordList) where(cond string, args ...any) {
-	l.query += ` AND ` + cond
-	l.args = append(l.args, args...)
-}
-
-// nameOr returns the coding's display name, else the record's own label, else fallback.
-func nameOr(name, label sql.NullString, fallback string) string {
-	switch {
-	case name.String != "":
-		return name.String
-	case label.String != "":
-		return label.String
-	}
-	return fallback
-}
-
-type warning struct {
-	Type   string `json:"type"`
-	Detail string `json:"detail,omitempty"`
-}
-
-// warningsFor returns the issues logged for each raw line, so responses can
-// say what was wrong with a record.
-func (s *Server) warningsFor(rawIDs []int64) (map[int64][]warning, error) {
-	out := map[int64][]warning{}
-	if len(rawIDs) == 0 {
-		return out, nil
-	}
-	ph := strings.TrimSuffix(strings.Repeat("?,", len(rawIDs)), ",")
-	args := make([]any, len(rawIDs))
-	for i, id := range rawIDs {
-		args[i] = id
-	}
-	rows, err := s.db.Query(`SELECT raw_resource_id, issue_type, coalesce(detail, '') FROM issues
-		WHERE raw_resource_id IN (`+ph+`) ORDER BY id`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		var w warning
-		if err := rows.Scan(&id, &w.Type, &w.Detail); err != nil {
-			return nil, err
-		}
-		out[id] = append(out[id], w)
-	}
-	return out, rows.Err()
-}
-
-func emptyIfNil(w []warning) []warning {
-	if w == nil {
-		return []warning{}
-	}
-	return w
-}
-
-func ageOn(birthDate string, now time.Time) any {
-	b, err := time.Parse("2006-01-02", birthDate)
-	if err != nil {
-		return nil
-	}
-	age := now.Year() - b.Year()
-	if now.YearDay() < b.YearDay() {
-		age--
-	}
-	return age
-}
-
 // ---------- GET /patients ----------
+
+type patientListItem struct {
+	ID        string  `json:"id"`
+	Name      *string `json:"name"`
+	Gender    *string `json:"gender"`
+	BirthDate *string `json:"birthDate"`
+	Age       *int    `json:"age"`
+}
 
 func (s *Server) listPatients(w http.ResponseWriter, r *http.Request) {
 	limit, err := intParam(r, "limit", 50, 1, 500)
@@ -172,73 +54,81 @@ func (s *Server) listPatients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	where, args := []string{"1=1"}, []any{}
+	// Build the filter from the parameters that were given.
+	where, args := "1=1", []any{}
 	if name := r.URL.Query().Get("name"); name != "" {
-		where = append(where, "lower(full_name) LIKE ?")
+		where += " AND lower(full_name) LIKE ?"
 		args = append(args, "%"+strings.ToLower(name)+"%")
 	}
 	if gender != "" {
-		where = append(where, "gender = ?")
+		where += " AND gender = ?"
 		args = append(args, gender)
 	}
 	if bornAfter != "" {
-		where = append(where, "birth_date >= ?")
+		where += " AND birth_date >= ?"
 		args = append(args, bornAfter)
 	}
 	if bornBefore != "" {
-		where = append(where, "birth_date <= ?")
+		where += " AND birth_date <= ?"
 		args = append(args, bornBefore)
 	}
-	cond := strings.Join(where, " AND ")
 
 	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM patients WHERE `+cond, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM patients WHERE `+where, args...).Scan(&total); err != nil {
 		serverError(w, err)
 		return
 	}
-	rows, err := s.db.Query(`SELECT id, full_name, gender, birth_date FROM patients WHERE `+cond+
-		` ORDER BY family_name, given_names, id LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	rows, err := s.db.Query(`SELECT id, full_name, gender, birth_date FROM patients WHERE `+where+`
+		ORDER BY family_name, given_names, id LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 	defer rows.Close()
-	list := []map[string]any{}
+	patients := []patientListItem{}
 	for rows.Next() {
-		var id string
-		var name, g, birth sql.NullString
-		if err := rows.Scan(&id, &name, &g, &birth); err != nil {
+		var p patientListItem
+		if err := rows.Scan(&p.ID, &p.Name, &p.Gender, &p.BirthDate); err != nil {
 			serverError(w, err)
 			return
 		}
-		list = append(list, map[string]any{"id": id, "name": nullStr(name), "gender": nullStr(g),
-			"birthDate": nullStr(birth), "age": ageOn(birth.String, s.now())})
+		p.Age = s.age(p.BirthDate)
+		patients = append(patients, p)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"total": total, "limit": limit, "offset": offset, "patients": list})
+	writeJSON(w, http.StatusOK, map[string]any{"total": total, "limit": limit, "offset": offset, "patients": patients})
 }
 
 // ---------- GET /patients/{id} ----------
+
+type patient struct {
+	ID           string         `json:"id"`
+	Name         *string        `json:"name"`
+	FamilyName   *string        `json:"familyName"`
+	GivenNames   *string        `json:"givenNames"`
+	Gender       *string        `json:"gender"`
+	BirthDate    *string        `json:"birthDate"`
+	Age          *int           `json:"age"`
+	Active       *bool          `json:"active"`
+	RecordCounts map[string]int `json:"recordCounts"`
+	Warnings     []warning      `json:"warnings"`
+}
 
 func (s *Server) getPatient(w http.ResponseWriter, r *http.Request) {
 	id := s.resolvePatient(w, r)
 	if id == "" {
 		return
 	}
+	p := patient{ID: id, RecordCounts: map[string]int{}}
 	var raw int64
-	var name, family, given, gender, birth sql.NullString
-	var active sql.NullBool
 	err := s.db.QueryRow(`SELECT raw_resource_id, full_name, family_name, given_names, gender, birth_date, active
-		FROM patients WHERE id = ?`, id).Scan(&raw, &name, &family, &given, &gender, &birth, &active)
+		FROM patients WHERE id = ?`, id).Scan(&raw, &p.Name, &p.FamilyName, &p.GivenNames, &p.Gender, &p.BirthDate, &p.Active)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	warns, err := s.warningsFor([]int64{raw})
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	counts := map[string]int{}
+	p.Age = s.age(p.BirthDate)
+
+	// How many records of each kind this patient has.
 	for key, table := range map[string]string{"conditions": "conditions", "medications": "medications",
 		"observations": "observations", "procedures": "procedures", "notes": "document_references"} {
 		var n int
@@ -246,24 +136,36 @@ func (s *Server) getPatient(w http.ResponseWriter, r *http.Request) {
 			serverError(w, err)
 			return
 		}
-		counts[key] = n
+		p.RecordCounts[key] = n
 	}
-	var activeV any
-	if active.Valid {
-		activeV = active.Bool
+
+	warnings, err := s.warningsFor([]int64{raw})
+	if err != nil {
+		serverError(w, err)
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"id": id, "name": nullStr(name), "familyName": nullStr(family), "givenNames": nullStr(given),
-		"gender": nullStr(gender), "birthDate": nullStr(birth), "age": ageOn(birth.String, s.now()),
-		"active": activeV, "recordCounts": counts, "warnings": emptyIfNil(warns[raw]),
-	})
+	p.Warnings = warnings.on(raw)
+	writeJSON(w, http.StatusOK, p)
 }
 
 // ---------- GET /patients/{id}/conditions ----------
 
+type condition struct {
+	ID           string    `json:"id"`
+	Condition    string    `json:"condition"` // the code's name, else the clinic's label
+	Label        *string   `json:"label"`
+	CodeSystem   *string   `json:"codeSystem"`
+	DiseaseCode  *string   `json:"diseaseCode"`
+	Status       *string   `json:"status"`
+	Verification *string   `json:"verification"`
+	Onset        *string   `json:"onset"`
+	Warnings     []warning `json:"warnings"`
+	raw          int64     // line in the file, for looking up warnings
+}
+
 func (s *Server) patientConditions(w http.ResponseWriter, r *http.Request) {
-	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, code_system, disease_code, name, label,
-		clinical_status, verification_status, onset_date FROM conditions`)
+	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, coalesce(name, label, 'Unspecified condition'), label,
+		code_system, disease_code, clinical_status, verification_status, onset_date FROM conditions`)
 	if !ok {
 		return
 	}
@@ -277,52 +179,55 @@ func (s *Server) patientConditions(w http.ResponseWriter, r *http.Request) {
 	if !list.includeHidden {
 		list.where(`coalesce(verification_status, '') <> 'entered-in-error'`)
 	}
+
 	rows, err := s.db.Query(list.query+` ORDER BY onset_date DESC, id`, list.args...)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 	defer rows.Close()
-	var items []map[string]any
+	conditions := []condition{}
 	var raws []int64
 	for rows.Next() {
-		var cid string
-		var raw int64
-		var system, code, name, label, clinical, verification, onset sql.NullString
-		if err := rows.Scan(&cid, &raw, &system, &code, &name, &label, &clinical, &verification, &onset); err != nil {
+		var c condition
+		if err := rows.Scan(&c.ID, &c.raw, &c.Condition, &c.Label, &c.CodeSystem, &c.DiseaseCode,
+			&c.Status, &c.Verification, &c.Onset); err != nil {
 			serverError(w, err)
 			return
 		}
-		raws = append(raws, raw)
-		items = append(items, map[string]any{"id": cid, "condition": nameOr(name, label, "Unspecified condition"), "label": nullStr(label),
-			"codeSystem": nullStr(system), "diseaseCode": nullStr(code), "status": nullStr(clinical),
-			"verification": nullStr(verification), "onset": nullStr(onset)})
+		conditions = append(conditions, c)
+		raws = append(raws, c.raw)
 	}
-	s.respondWithWarnings(w, items, raws)
-}
 
-// respondWithWarnings attaches the issue list to each item and writes the list.
-// raws[i] is the raw line of items[i].
-func (s *Server) respondWithWarnings(w http.ResponseWriter, items []map[string]any, raws []int64) {
-	warns, err := s.warningsFor(raws)
+	warnings, err := s.warningsFor(raws)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	for i, it := range items {
-		it["warnings"] = emptyIfNil(warns[raws[i]])
+	for i := range conditions {
+		conditions[i].Warnings = warnings.on(conditions[i].raw)
 	}
-	if items == nil {
-		items = []map[string]any{}
-	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, conditions)
 }
 
 // ---------- GET /patients/{id}/medications ----------
 
+type medication struct {
+	ID           string    `json:"id"`
+	Medication   *string   `json:"medication"` // the code's name, else the clinic's label
+	Label        *string   `json:"label"`
+	CodeSystem   *string   `json:"codeSystem"`
+	DrugCode     *string   `json:"drugCode"`
+	Status       *string   `json:"status"`
+	PrescribedAt *string   `json:"prescribedAt"`
+	Dosage       *string   `json:"dosage"`
+	Warnings     []warning `json:"warnings"`
+	raw          int64
+}
+
 func (s *Server) patientMedications(w http.ResponseWriter, r *http.Request) {
-	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, code_system, drug_code, name, label,
-		status, prescribed_at, dosage FROM medications`)
+	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, coalesce(name, label), label,
+		code_system, drug_code, status, prescribed_at, dosage FROM medications`)
 	if !ok {
 		return
 	}
@@ -336,42 +241,68 @@ func (s *Server) patientMedications(w http.ResponseWriter, r *http.Request) {
 	if !list.includeHidden {
 		list.where(`coalesce(status, '') <> 'entered-in-error'`)
 	}
+
 	rows, err := s.db.Query(list.query+` ORDER BY prescribed_at DESC, id`, list.args...)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 	defer rows.Close()
-	var items []map[string]any
+	medications := []medication{}
 	var raws []int64
 	for rows.Next() {
-		var mid string
-		var raw int64
-		var system, code, name, label, st, at, dosage sql.NullString
-		if err := rows.Scan(&mid, &raw, &system, &code, &name, &label, &st, &at, &dosage); err != nil {
+		var m medication
+		if err := rows.Scan(&m.ID, &m.raw, &m.Medication, &m.Label, &m.CodeSystem, &m.DrugCode,
+			&m.Status, &m.PrescribedAt, &m.Dosage); err != nil {
 			serverError(w, err)
 			return
 		}
-		raws = append(raws, raw)
-		items = append(items, map[string]any{"id": mid, "medication": nullIfEmpty(nameOr(name, label, "")), "label": nullStr(label),
-			"codeSystem": nullStr(system), "drugCode": nullStr(code), "status": nullStr(st),
-			"prescribedAt": nullStr(at), "dosage": nullStr(dosage)})
+		medications = append(medications, m)
+		raws = append(raws, m.raw)
 	}
-	s.respondWithWarnings(w, items, raws)
-}
 
-func nullIfEmpty(s string) any {
-	if s == "" {
-		return nil
+	warnings, err := s.warningsFor(raws)
+	if err != nil {
+		serverError(w, err)
+		return
 	}
-	return s
+	for i := range medications {
+		medications[i].Warnings = warnings.on(medications[i].raw)
+	}
+	writeJSON(w, http.StatusOK, medications)
 }
 
 // ---------- GET /patients/{id}/observations ----------
 
+type observation struct {
+	ID            string      `json:"id"`
+	Test          *string     `json:"test"` // the code's name, else the clinic's label
+	Label         *string     `json:"label"`
+	CodeSystem    *string     `json:"codeSystem"`
+	Code          *string     `json:"code"`
+	Date          *string     `json:"date"`
+	Status        *string     `json:"status"`
+	Value         *float64    `json:"value"`
+	ValueText     *string     `json:"valueText"`
+	Unit          *string     `json:"unit"`
+	Components    []component `json:"components,omitempty"`    // e.g. systolic and diastolic
+	HiddenBecause []string    `json:"hiddenBecause,omitempty"` // only with ?includeHidden=true
+	Warnings      []warning   `json:"warnings"`
+	raw           int64
+}
+
+// component is one part of a multi-part result, like systolic blood pressure.
+type component struct {
+	Test      *string  `json:"test"`
+	Code      *string  `json:"code"`
+	Value     *float64 `json:"value"`
+	ValueText *string  `json:"valueText"`
+	Unit      *string  `json:"unit"`
+}
+
 func (s *Server) patientObservations(w http.ResponseWriter, r *http.Request) {
-	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, code_system, lab_test_code, name, label, status,
-		measured_at, is_primary, replaced_by, is_impossible FROM observations`)
+	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, coalesce(name, label), label,
+		code_system, lab_test_code, measured_at, status, is_primary, replaced_by, is_impossible FROM observations`)
 	if !ok {
 		return
 	}
@@ -395,82 +326,86 @@ func (s *Server) patientObservations(w http.ResponseWriter, r *http.Request) {
 	if !list.includeHidden {
 		list.where(visibleObservation)
 	}
+
 	rows, err := s.db.Query(list.query+` ORDER BY measured_at DESC, id`, list.args...)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 	defer rows.Close()
-	var items []map[string]any
+	observations := []observation{}
 	var raws []int64
 	for rows.Next() {
-		var oid string
-		var raw int64
-		var system, code, name, label, st, at, replacedBy sql.NullString
-		var primary, impossible bool
-		if err := rows.Scan(&oid, &raw, &system, &code, &name, &label, &st, &at,
-			&primary, &replacedBy, &impossible); err != nil {
+		var o observation
+		var isPrimary, isImpossible bool
+		var replacedBy *string
+		if err := rows.Scan(&o.ID, &o.raw, &o.Test, &o.Label, &o.CodeSystem, &o.Code, &o.Date, &o.Status,
+			&isPrimary, &replacedBy, &isImpossible); err != nil {
 			serverError(w, err)
 			return
 		}
-		item := map[string]any{"id": oid, "test": nullIfEmpty(nameOr(name, label, "")), "label": nullStr(label), "codeSystem": nullStr(system),
-			"code": nullStr(code), "date": nullStr(at), "status": nullStr(st)}
 		if list.includeHidden {
-			hidden := []string{}
-			if replacedBy.Valid {
-				hidden = append(hidden, "replaced by "+replacedBy.String)
-			} else if !primary {
-				hidden = append(hidden, "not the primary record in its duplicate group")
-			}
-			if impossible {
-				hidden = append(hidden, "impossible value")
-			}
-			if st.String == "entered-in-error" || st.String == "cancelled" {
-				hidden = append(hidden, "status "+st.String)
-			}
-			item["hiddenBecause"] = hidden
+			o.HiddenBecause = hiddenReasons(o.Status, isPrimary, replacedBy, isImpossible)
 		}
-		raws = append(raws, raw)
-		items = append(items, item)
+		observations = append(observations, o)
+		raws = append(raws, o.raw)
 	}
 
-	for _, it := range items {
-		if err := s.addValues(it); err != nil {
+	for i := range observations {
+		if err := s.addValues(&observations[i]); err != nil {
 			serverError(w, err)
 			return
 		}
 	}
-	s.respondWithWarnings(w, items, raws)
+	warnings, err := s.warningsFor(raws)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	for i := range observations {
+		observations[i].Warnings = warnings.on(observations[i].raw)
+	}
+	writeJSON(w, http.StatusOK, observations)
 }
 
-// addValues adds an observation's results to its JSON from observation_values:
-// value, valueText and unit for a single result, and "components" for a
-// multi-part result like blood pressure.
-func (s *Server) addValues(item map[string]any) error {
-	rows, err := s.db.Query(`SELECT is_component, lab_test_code, name, value, value_text, unit FROM observation_values
-		WHERE observation_id = ? ORDER BY rowid`, item["id"])
+// hiddenReasons says why an observation is hidden from the default view.
+// It's empty for one that is shown.
+func hiddenReasons(status *string, isPrimary bool, replacedBy *string, isImpossible bool) []string {
+	var reasons []string
+	if replacedBy != nil {
+		reasons = append(reasons, "replaced by "+*replacedBy)
+	} else if !isPrimary {
+		reasons = append(reasons, "not the primary record in its duplicate group")
+	}
+	if isImpossible {
+		reasons = append(reasons, "impossible value")
+	}
+	if status != nil && (*status == "entered-in-error" || *status == "cancelled") {
+		reasons = append(reasons, "status "+*status)
+	}
+	return reasons
+}
+
+// addValues fills in an observation's results from observation_values: the
+// single value, or the components of a multi-part result like blood pressure.
+func (s *Server) addValues(o *observation) error {
+	rows, err := s.db.Query(`SELECT is_component, name, lab_test_code, value, value_text, unit FROM observation_values
+		WHERE observation_id = ? ORDER BY rowid`, o.ID)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	item["value"], item["valueText"], item["unit"] = nil, nil, nil
-	var components []map[string]any
 	for rows.Next() {
 		var isComponent bool
-		var code, name, valueText, unit sql.NullString
-		var value sql.NullFloat64
-		if err := rows.Scan(&isComponent, &code, &name, &value, &valueText, &unit); err != nil {
+		var c component
+		if err := rows.Scan(&isComponent, &c.Test, &c.Code, &c.Value, &c.ValueText, &c.Unit); err != nil {
 			return err
 		}
 		if isComponent {
-			components = append(components, map[string]any{"test": nullStr(name), "code": nullStr(code), "value": nullFloat(value),
-				"valueText": nullStr(valueText), "unit": nullStr(unit)})
+			o.Components = append(o.Components, c)
 		} else {
-			item["value"], item["valueText"], item["unit"] = nullFloat(value), nullStr(valueText), nullStr(unit)
+			o.Value, o.ValueText, o.Unit = c.Value, c.ValueText, c.Unit
 		}
-	}
-	if len(components) > 0 {
-		item["components"] = components
 	}
 	return rows.Err()
 }
@@ -491,120 +426,167 @@ func labShortcut(code string) string {
 
 // ---------- GET /patients/{id}/procedures ----------
 
+type procedure struct {
+	ID            string    `json:"id"`
+	Procedure     *string   `json:"procedure"` // the code's name, else the clinic's label
+	Label         *string   `json:"label"`
+	CodeSystem    *string   `json:"codeSystem"`
+	ProcedureCode *string   `json:"procedureCode"`
+	Status        *string   `json:"status"`
+	PerformedAt   *string   `json:"performedAt"`
+	Performer     *string   `json:"performer"`
+	Warnings      []warning `json:"warnings"`
+	raw           int64
+}
+
 func (s *Server) patientProcedures(w http.ResponseWriter, r *http.Request) {
-	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, code_system, procedure_code, name, label,
-		status, performed_at, performer FROM procedures`)
+	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, coalesce(name, label), label,
+		code_system, procedure_code, status, performed_at, performer FROM procedures`)
 	if !ok {
 		return
 	}
 	if !list.includeHidden {
 		list.where(`coalesce(status, '') <> 'entered-in-error'`)
 	}
+
 	rows, err := s.db.Query(list.query+` ORDER BY performed_at DESC, id`, list.args...)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 	defer rows.Close()
-	var items []map[string]any
+	procedures := []procedure{}
 	var raws []int64
 	for rows.Next() {
-		var pid string
-		var raw int64
-		var system, code, name, label, st, at, performer sql.NullString
-		if err := rows.Scan(&pid, &raw, &system, &code, &name, &label, &st, &at, &performer); err != nil {
+		var p procedure
+		if err := rows.Scan(&p.ID, &p.raw, &p.Procedure, &p.Label, &p.CodeSystem, &p.ProcedureCode,
+			&p.Status, &p.PerformedAt, &p.Performer); err != nil {
 			serverError(w, err)
 			return
 		}
-		raws = append(raws, raw)
-		items = append(items, map[string]any{"id": pid, "procedure": nullIfEmpty(nameOr(name, label, "")), "label": nullStr(label),
-			"codeSystem": nullStr(system), "procedureCode": nullStr(code), "status": nullStr(st),
-			"performedAt": nullStr(at), "performer": nullStr(performer)})
+		procedures = append(procedures, p)
+		raws = append(raws, p.raw)
 	}
-	s.respondWithWarnings(w, items, raws)
+
+	warnings, err := s.warningsFor(raws)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	for i := range procedures {
+		procedures[i].Warnings = warnings.on(procedures[i].raw)
+	}
+	writeJSON(w, http.StatusOK, procedures)
 }
 
 // ---------- GET /patients/{id}/notes ----------
 
+type note struct {
+	ID          string       `json:"id"`
+	Type        *string      `json:"type"`
+	Date        *string      `json:"date"`
+	Author      *string      `json:"author"`
+	Status      *string      `json:"status"`
+	Attachments []attachment `json:"attachments"`
+	Warnings    []warning    `json:"warnings"`
+	raw         int64
+}
+
+// attachment is one file of a note, with its text when it's readable.
+type attachment struct {
+	BinaryID              string  `json:"binaryId"`
+	ContentType           *string `json:"contentType"`
+	SizeBytes             *int64  `json:"sizeBytes,omitempty"`
+	Text                  *string `json:"text"`
+	TextUnavailableReason string  `json:"textUnavailableReason,omitempty"`
+}
+
 func (s *Server) patientNotes(w http.ResponseWriter, r *http.Request) {
-	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, status, note_type, date, author FROM document_references`)
+	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, note_type, date, author, status FROM document_references`)
 	if !ok {
 		return
 	}
 	if !list.includeHidden {
 		list.where(`coalesce(status, '') <> 'entered-in-error'`)
 	}
+
 	rows, err := s.db.Query(list.query+` ORDER BY date DESC, id`, list.args...)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 	defer rows.Close()
-	var items []map[string]any
+	notes := []note{}
 	var raws []int64
 	for rows.Next() {
-		var did string
-		var raw int64
-		var st, noteType, date, author sql.NullString
-		if err := rows.Scan(&did, &raw, &st, &noteType, &date, &author); err != nil {
+		var n note
+		if err := rows.Scan(&n.ID, &n.raw, &n.Type, &n.Date, &n.Author, &n.Status); err != nil {
 			serverError(w, err)
 			return
 		}
-		raws = append(raws, raw)
-		items = append(items, map[string]any{"id": did, "type": nullStr(noteType), "date": nullStr(date),
-			"author": nullStr(author), "status": nullStr(st)})
+		notes = append(notes, n)
+		raws = append(raws, n.raw)
 	}
 
-	for _, it := range items {
-		atts, err := s.attachments(it["id"].(string))
-		if err != nil {
+	for i := range notes {
+		if notes[i].Attachments, err = s.attachments(notes[i].ID); err != nil {
 			serverError(w, err)
 			return
 		}
-		it["attachments"] = atts
 	}
-	s.respondWithWarnings(w, items, raws)
+	warnings, err := s.warningsFor(raws)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	for i := range notes {
+		notes[i].Warnings = warnings.on(notes[i].raw)
+	}
+	writeJSON(w, http.StatusOK, notes)
 }
 
-func (s *Server) attachments(documentID string) ([]map[string]any, error) {
+// attachments lists a note's files. When there's no readable text, it says why.
+func (s *Server) attachments(noteID string) ([]attachment, error) {
 	rows, err := s.db.Query(`SELECT a.binary_id, b.id IS NOT NULL, b.content_type, b.size_bytes, b.text, b.data IS NOT NULL
 		FROM document_attachments a LEFT JOIN binaries b ON b.id = a.binary_id
-		WHERE a.document_id = ? ORDER BY a.binary_id`, documentID)
+		WHERE a.document_id = ? ORDER BY a.binary_id`, noteID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []map[string]any{}
+	attachments := []attachment{}
 	for rows.Next() {
-		var binaryID string
+		var a attachment
 		var found, hasData bool
-		var contentType, text sql.NullString
-		var size sql.NullInt64
-		if err := rows.Scan(&binaryID, &found, &contentType, &size, &text, &hasData); err != nil {
+		if err := rows.Scan(&a.BinaryID, &found, &a.ContentType, &a.SizeBytes, &a.Text, &hasData); err != nil {
 			return nil, err
 		}
-		att := map[string]any{"binaryId": binaryID, "contentType": nullStr(contentType), "text": nullStr(text)}
-		if size.Valid {
-			att["sizeBytes"] = size.Int64
+		switch {
+		case a.Text != nil:
+			// readable text: nothing to explain
+		case !found:
+			a.TextUnavailableReason = "the Binary this note points to is not in the data"
+		case !hasData:
+			a.TextUnavailableReason = "the content could not be decoded or was too large"
+		default:
+			a.TextUnavailableReason = fmt.Sprintf("content is %s, not text", *a.ContentType)
 		}
-		if !text.Valid {
-			switch {
-			case !found:
-				att["textUnavailableReason"] = "the Binary this note points to is not in the data"
-			case !hasData:
-				att["textUnavailableReason"] = "the content could not be decoded or was too large"
-			default:
-				att["textUnavailableReason"] = fmt.Sprintf("content is %s, not text", contentType.String)
-			}
-		}
-		out = append(out, att)
+		attachments = append(attachments, a)
 	}
-	return out, rows.Err()
+	return attachments, rows.Err()
 }
 
 // ---------- GET /patients/{id}/timeline ----------
 
-// The timeline puts every visible record in one list, newest first.
+type event struct {
+	Date   *string `json:"date"`
+	Kind   string  `json:"kind"` // observation, condition, medication, procedure or note
+	ID     string  `json:"id"`
+	Title  string  `json:"title"`
+	Detail *string `json:"detail"`
+}
+
+// patientTimeline puts every visible record in one list, newest first.
 func (s *Server) patientTimeline(w http.ResponseWriter, r *http.Request) {
 	id := s.resolvePatient(w, r)
 	if id == "" {
@@ -633,24 +615,160 @@ func (s *Server) patientTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	events := []map[string]any{}
+	events := []event{}
 	for rows.Next() {
-		var date, kind, rid, title, detail sql.NullString
-		if err := rows.Scan(&date, &kind, &rid, &title, &detail); err != nil {
+		var e event
+		if err := rows.Scan(&e.Date, &e.Kind, &e.ID, &e.Title, &e.Detail); err != nil {
 			serverError(w, err)
 			return
 		}
-		events = append(events, map[string]any{"date": nullStr(date), "kind": kind.String, "id": rid.String,
-			"title": title.String, "detail": nullStr(detail)})
+		events = append(events, e)
 	}
+
 	// Newest first; records without a date go last.
 	sort.SliceStable(events, func(i, j int) bool {
-		di, _ := events[i]["date"].(string)
-		dj, _ := events[j]["date"].(string)
-		if di == "" || dj == "" {
-			return di != ""
+		a, b := events[i].Date, events[j].Date
+		if a == nil || b == nil {
+			return a != nil
 		}
-		return di > dj
+		return *a > *b
 	})
 	writeJSON(w, http.StatusOK, events)
+}
+
+// ---------- Shared helpers ----------
+
+// resolvePatient finds the patient for {id}. Ids work in any capitalization,
+// as long as only one patient matches. It writes a 404 and returns "" otherwise.
+func (s *Server) resolvePatient(w http.ResponseWriter, r *http.Request) string {
+	id := r.PathValue("id")
+	matches, err := s.stringList(`SELECT id FROM patients WHERE lower(id) = lower(?)`, id)
+	if err != nil {
+		serverError(w, err)
+		return ""
+	}
+	if slices.Contains(matches, id) {
+		return id
+	}
+	if len(matches) == 1 {
+		return matches[0]
+	}
+	writeError(w, http.StatusNotFound, "PATIENT_NOT_FOUND", "no patient with id "+id)
+	return ""
+}
+
+// recordList is the query for one of a patient's record lists, built up
+// filter by filter.
+type recordList struct {
+	query         string
+	args          []any
+	includeHidden bool // ?includeHidden=true
+}
+
+// newRecordList reads what every record list needs: the patient and
+// ?includeHidden. ok is false when an error response was already written.
+func (s *Server) newRecordList(w http.ResponseWriter, r *http.Request, selectFrom string) (list *recordList, ok bool) {
+	id := s.resolvePatient(w, r)
+	if id == "" {
+		return nil, false
+	}
+	includeHidden, err := boolParam(r, "includeHidden")
+	if paramError(w, err) {
+		return nil, false
+	}
+	return &recordList{query: selectFrom + ` WHERE patient_id = ?`, args: []any{id}, includeHidden: includeHidden}, true
+}
+
+// where adds one filter to the query.
+func (l *recordList) where(cond string, args ...any) {
+	l.query += ` AND ` + cond
+	l.args = append(l.args, args...)
+}
+
+// warning is one problem found in a record, from the issues table.
+type warning struct {
+	Type   string `json:"type"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// warningsByLine holds the warnings for each raw line.
+type warningsByLine map[int64][]warning
+
+// on returns the warnings for one line, or an empty list.
+func (w warningsByLine) on(line int64) []warning {
+	if w[line] == nil {
+		return []warning{}
+	}
+	return w[line]
+}
+
+// warningsFor looks up the issues logged for the given raw lines, so a
+// response can say what was wrong with each record.
+func (s *Server) warningsFor(lines []int64) (warningsByLine, error) {
+	out := warningsByLine{}
+	if len(lines) == 0 {
+		return out, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(lines)), ",")
+	args := make([]any, len(lines))
+	for i, line := range lines {
+		args[i] = line
+	}
+	rows, err := s.db.Query(`SELECT raw_resource_id, issue_type, coalesce(detail, '') FROM issues
+		WHERE raw_resource_id IN (`+placeholders+`) ORDER BY id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var line int64
+		var w warning
+		if err := rows.Scan(&line, &w.Type, &w.Detail); err != nil {
+			return nil, err
+		}
+		out[line] = append(out[line], w)
+	}
+	return out, rows.Err()
+}
+
+// stringList runs a query that returns one text column and collects the values.
+func (s *Server) stringList(query string, args ...any) ([]string, error) {
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// age is the patient's age today, or nil without a full birth date.
+func (s *Server) age(birthDate *string) *int {
+	if birthDate == nil {
+		return nil
+	}
+	if age, ok := ageOn(*birthDate, s.now()); ok {
+		return &age
+	}
+	return nil
+}
+
+// ageOn is the age on a given day. ok is false unless birthDate is a full date.
+func ageOn(birthDate string, now time.Time) (age int, ok bool) {
+	b, err := time.Parse("2006-01-02", birthDate)
+	if err != nil {
+		return 0, false
+	}
+	age = now.Year() - b.Year()
+	if now.YearDay() < b.YearDay() {
+		age--
+	}
+	return age, true
 }

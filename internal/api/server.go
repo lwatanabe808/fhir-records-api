@@ -191,6 +191,14 @@ func nullStr(s sql.NullString) any {
 	return nil
 }
 
+// nullIfEmpty turns "" into JSON null.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 func nullFloat(f sql.NullFloat64) any {
 	if f.Valid {
 		return f.Float64

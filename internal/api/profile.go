@@ -136,7 +136,7 @@ func (s *Server) population() (map[string]any, error) {
 			return nil, err
 		}
 		genders[gender]++
-		age, ok := ageOn(birth.String, s.now()).(int)
+		age, ok := ageOn(birth.String, s.now())
 		if !ok {
 			ages["unknown"]++
 			continue
