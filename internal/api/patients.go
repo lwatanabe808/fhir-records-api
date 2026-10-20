@@ -110,7 +110,6 @@ type patient struct {
 	Age          *int           `json:"age"`
 	Active       *bool          `json:"active"`
 	RecordCounts map[string]int `json:"recordCounts"`
-	Warnings     []warning      `json:"warnings"`
 }
 
 func (s *Server) getPatient(w http.ResponseWriter, r *http.Request) {
@@ -119,9 +118,8 @@ func (s *Server) getPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := patient{ID: id, RecordCounts: map[string]int{}}
-	var raw int64
-	err := s.db.QueryRow(`SELECT raw_resource_id, full_name, family_name, given_names, gender, birth_date, active
-		FROM patients WHERE id = ?`, id).Scan(&raw, &p.Name, &p.FamilyName, &p.GivenNames, &p.Gender, &p.BirthDate, &p.Active)
+	err := s.db.QueryRow(`SELECT full_name, family_name, given_names, gender, birth_date, active
+		FROM patients WHERE id = ?`, id).Scan(&p.Name, &p.FamilyName, &p.GivenNames, &p.Gender, &p.BirthDate, &p.Active)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -139,33 +137,24 @@ func (s *Server) getPatient(w http.ResponseWriter, r *http.Request) {
 		p.RecordCounts[key] = n
 	}
 
-	// list of warnings
-	warnings, err := s.warningsFor([]int64{raw})
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	p.Warnings = warnings.on(raw)
 	writeJSON(w, http.StatusOK, p)
 }
 
 // ---------- GET /patients/{id}/conditions ----------
 
 type condition struct {
-	ID           string    `json:"id"`
-	Condition    string    `json:"condition"` // the code's name, else the clinic's label
-	Label        *string   `json:"label"`
-	CodeSystem   *string   `json:"codeSystem"`
-	DiseaseCode  *string   `json:"diseaseCode"`
-	Status       *string   `json:"status"`
-	Verification *string   `json:"verification"`
-	Onset        *string   `json:"onset"`
-	Warnings     []warning `json:"warnings"`
-	raw          int64     // line in the file, for looking up warnings
+	ID           string  `json:"id"`
+	Condition    string  `json:"condition"` // the code's name, else the clinic's label
+	Label        *string `json:"label"`
+	CodeSystem   *string `json:"codeSystem"`
+	DiseaseCode  *string `json:"diseaseCode"`
+	Status       *string `json:"status"`
+	Verification *string `json:"verification"`
+	Onset        *string `json:"onset"`
 }
 
 func (s *Server) patientConditions(w http.ResponseWriter, r *http.Request) {
-	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, coalesce(name, label, 'Unspecified condition'), label,
+	list, ok := s.newRecordList(w, r, `SELECT id, coalesce(name, label, 'Unspecified condition'), label,
 		code_system, disease_code, clinical_status, verification_status, onset_date FROM conditions`)
 	if !ok {
 		return
@@ -186,46 +175,34 @@ func (s *Server) patientConditions(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	conditions := []condition{}
-	var raws []int64
 	for rows.Next() {
 		var c condition
-		if err := rows.Scan(&c.ID, &c.raw, &c.Condition, &c.Label, &c.CodeSystem, &c.DiseaseCode,
+		if err := rows.Scan(&c.ID, &c.Condition, &c.Label, &c.CodeSystem, &c.DiseaseCode,
 			&c.Status, &c.Verification, &c.Onset); err != nil {
 			serverError(w, err)
 			return
 		}
 		conditions = append(conditions, c)
-		raws = append(raws, c.raw)
 	}
 
-	warnings, err := s.warningsFor(raws)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	for i := range conditions {
-		conditions[i].Warnings = warnings.on(conditions[i].raw)
-	}
 	writeJSON(w, http.StatusOK, conditions)
 }
 
 // ---------- GET /patients/{id}/medications ----------
 
 type medication struct {
-	ID           string    `json:"id"`
-	Medication   *string   `json:"medication"` // the code's name, else the clinic's label
-	Label        *string   `json:"label"`
-	CodeSystem   *string   `json:"codeSystem"`
-	DrugCode     *string   `json:"drugCode"`
-	Status       *string   `json:"status"`
-	PrescribedAt *string   `json:"prescribedAt"`
-	Dosage       *string   `json:"dosage"`
-	Warnings     []warning `json:"warnings"`
-	raw          int64
+	ID           string  `json:"id"`
+	Medication   *string `json:"medication"` // the code's name, else the clinic's label
+	Label        *string `json:"label"`
+	CodeSystem   *string `json:"codeSystem"`
+	DrugCode     *string `json:"drugCode"`
+	Status       *string `json:"status"`
+	PrescribedAt *string `json:"prescribedAt"`
+	Dosage       *string `json:"dosage"`
 }
 
 func (s *Server) patientMedications(w http.ResponseWriter, r *http.Request) {
-	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, coalesce(name, label), label,
+	list, ok := s.newRecordList(w, r, `SELECT id, coalesce(name, label), label,
 		code_system, drug_code, status, prescribed_at, dosage FROM medications`)
 	if !ok {
 		return
@@ -246,26 +223,16 @@ func (s *Server) patientMedications(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	medications := []medication{}
-	var raws []int64
 	for rows.Next() {
 		var m medication
-		if err := rows.Scan(&m.ID, &m.raw, &m.Medication, &m.Label, &m.CodeSystem, &m.DrugCode,
+		if err := rows.Scan(&m.ID, &m.Medication, &m.Label, &m.CodeSystem, &m.DrugCode,
 			&m.Status, &m.PrescribedAt, &m.Dosage); err != nil {
 			serverError(w, err)
 			return
 		}
 		medications = append(medications, m)
-		raws = append(raws, m.raw)
 	}
 
-	warnings, err := s.warningsFor(raws)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	for i := range medications {
-		medications[i].Warnings = warnings.on(medications[i].raw)
-	}
 	writeJSON(w, http.StatusOK, medications)
 }
 
@@ -283,8 +250,6 @@ type observation struct {
 	ValueText  *string     `json:"valueText"`
 	Unit       *string     `json:"unit"`
 	Components []component `json:"components,omitempty"` // e.g. systolic and diastolic
-	Warnings   []warning   `json:"warnings"`
-	raw        int64
 }
 
 // component is one part of a multi-part result, like systolic blood pressure.
@@ -298,7 +263,7 @@ type component struct {
 
 func (s *Server) patientObservations(w http.ResponseWriter, r *http.Request) {
 	// start to build the LIST query
-	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, coalesce(name, label), label,
+	list, ok := s.newRecordList(w, r, `SELECT id, coalesce(name, label), label,
 		code_system, lab_test_code, measured_at, status FROM observations`)
 	if !ok {
 		return
@@ -329,30 +294,20 @@ func (s *Server) patientObservations(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	observations := []observation{}
-	var raws []int64
 	for rows.Next() {
 		var o observation
-		if err := rows.Scan(&o.ID, &o.raw, &o.Test, &o.Label, &o.CodeSystem, &o.Code, &o.Date, &o.Status); err != nil {
+		if err := rows.Scan(&o.ID, &o.Test, &o.Label, &o.CodeSystem, &o.Code, &o.Date, &o.Status); err != nil {
 			serverError(w, err)
 			return
 		}
 		observations = append(observations, o)
-		raws = append(raws, o.raw)
 	}
 
-	// Now that the query is done, add every observation's values and warnings.
+	// Now that the query is done, add every observation's values.
 	// populate the observation results
 	if err := s.addValues(observations); err != nil {
 		serverError(w, err)
 		return
-	}
-	warnings, err := s.warningsFor(raws)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	for i := range observations {
-		observations[i].Warnings = warnings.on(observations[i].raw)
 	}
 	writeJSON(w, http.StatusOK, observations)
 }
@@ -396,21 +351,19 @@ func (s *Server) addValues(observations []observation) error {
 // ---------- GET /patients/{id}/procedures ----------
 
 type procedure struct {
-	ID            string    `json:"id"`
-	Procedure     *string   `json:"procedure"` // the code's name, else the clinic's label
-	Label         *string   `json:"label"`
-	CodeSystem    *string   `json:"codeSystem"`
-	ProcedureCode *string   `json:"procedureCode"`
-	Status        *string   `json:"status"`
-	PerformedAt   *string   `json:"performedAt"`
-	Performer     *string   `json:"performer"`
-	Warnings      []warning `json:"warnings"`
-	raw           int64
+	ID            string  `json:"id"`
+	Procedure     *string `json:"procedure"` // the code's name, else the clinic's label
+	Label         *string `json:"label"`
+	CodeSystem    *string `json:"codeSystem"`
+	ProcedureCode *string `json:"procedureCode"`
+	Status        *string `json:"status"`
+	PerformedAt   *string `json:"performedAt"`
+	Performer     *string `json:"performer"`
 }
 
 func (s *Server) patientProcedures(w http.ResponseWriter, r *http.Request) {
 	// starts to build the list query
-	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, coalesce(name, label), label,
+	list, ok := s.newRecordList(w, r, `SELECT id, coalesce(name, label), label,
 		code_system, procedure_code, status, performed_at, performer FROM procedures`)
 	if !ok {
 		return
@@ -424,26 +377,16 @@ func (s *Server) patientProcedures(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	procedures := []procedure{}
-	var raws []int64
 	for rows.Next() {
 		var p procedure
-		if err := rows.Scan(&p.ID, &p.raw, &p.Procedure, &p.Label, &p.CodeSystem, &p.ProcedureCode,
+		if err := rows.Scan(&p.ID, &p.Procedure, &p.Label, &p.CodeSystem, &p.ProcedureCode,
 			&p.Status, &p.PerformedAt, &p.Performer); err != nil {
 			serverError(w, err)
 			return
 		}
 		procedures = append(procedures, p)
-		raws = append(raws, p.raw)
 	}
 
-	warnings, err := s.warningsFor(raws)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	for i := range procedures {
-		procedures[i].Warnings = warnings.on(procedures[i].raw)
-	}
 	writeJSON(w, http.StatusOK, procedures)
 }
 
@@ -456,8 +399,6 @@ type note struct {
 	Author      *string      `json:"author"`
 	Status      *string      `json:"status"`
 	Attachments []attachment `json:"attachments"`
-	Warnings    []warning    `json:"warnings"`
-	raw         int64
 }
 
 // attachment is one file of a note, with its text when it's readable.
@@ -470,7 +411,7 @@ type attachment struct {
 }
 
 func (s *Server) patientNotes(w http.ResponseWriter, r *http.Request) {
-	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, note_type, date, author, status FROM document_references`)
+	list, ok := s.newRecordList(w, r, `SELECT id, note_type, date, author, status FROM document_references`)
 	if !ok {
 		return
 	}
@@ -483,29 +424,19 @@ func (s *Server) patientNotes(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	notes := []note{}
-	var raws []int64
 	for rows.Next() {
 		var n note
-		if err := rows.Scan(&n.ID, &n.raw, &n.Type, &n.Date, &n.Author, &n.Status); err != nil {
+		if err := rows.Scan(&n.ID, &n.Type, &n.Date, &n.Author, &n.Status); err != nil {
 			serverError(w, err)
 			return
 		}
 		notes = append(notes, n)
-		raws = append(raws, n.raw)
 	}
 
-	// Now that the query is done, add every note's attachments and warnings.
+	// Now that the query is done, add every note's attachments.
 	if err := s.addAttachments(notes); err != nil {
 		serverError(w, err)
 		return
-	}
-	warnings, err := s.warningsFor(raws)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	for i := range notes {
-		notes[i].Warnings = warnings.on(notes[i].raw)
 	}
 	writeJSON(w, http.StatusOK, notes)
 }
@@ -654,51 +585,6 @@ func (s *Server) newRecordList(w http.ResponseWriter, r *http.Request, selectFro
 func (l *recordList) where(cond string, args ...any) {
 	l.query += ` AND ` + cond
 	l.args = append(l.args, args...)
-}
-
-// warning is one problem found in a record, from the issues table.
-type warning struct {
-	Type   string `json:"type"`
-	Detail string `json:"detail,omitempty"`
-}
-
-// warningsByLine holds the warnings for each raw line.
-type warningsByLine map[int64][]warning
-
-// on returns the warnings for one line, or an empty list.
-func (w warningsByLine) on(line int64) []warning {
-	if w[line] == nil {
-		return []warning{}
-	}
-	return w[line]
-}
-
-// warningsFor looks up the issues logged for the given raw lines, so a
-// response can say what was wrong with each record.
-func (s *Server) warningsFor(lines []int64) (warningsByLine, error) {
-	out := warningsByLine{}
-	if len(lines) == 0 {
-		return out, nil
-	}
-	args := make([]any, len(lines))
-	for i, line := range lines {
-		args[i] = line
-	}
-	rows, err := s.db.Query(`SELECT raw_resource_id, issue_type, coalesce(detail, '') FROM issues
-		WHERE raw_resource_id IN (`+placeholders(len(lines))+`) ORDER BY id`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var line int64
-		var w warning
-		if err := rows.Scan(&line, &w.Type, &w.Detail); err != nil {
-			return nil, err
-		}
-		out[line] = append(out[line], w)
-	}
-	return out, rows.Err()
 }
 
 // placeholders returns "?, ?, ?" with n question marks, for a SQL IN (...) list.

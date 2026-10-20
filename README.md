@@ -77,7 +77,7 @@ make test
 | `GET /patients/{id}/notes` | Notes with decoded text, or the reason text isn't available |
 | `GET /patients/{id}/timeline` | Every record in one list, newest first |
 
-Every list item has a `warnings` field listing problems found in that record. Records that shouldn't count as real data are never shown in the patient app: entered in error, replaced by a correction, extra duplicates, and impossible values. They stay in the database, and `/data-quality/issues` lists each one with the reason.
+The patient endpoints return clean data only. Records that shouldn't count as real data are never shown: entered in error, replaced by a correction, extra duplicates, and impossible values. They stay in the database. Every problem found while loading, and what was done about it, is listed in `/data-quality/issues` (filter by `recordId` to see one record's problems).
 
 ### Research partners (B2B)
 | Endpoint | What it returns |
@@ -254,7 +254,7 @@ Besides the sample file, [testdata/scenarios](testdata/scenarios) has input file
 - **Capital letters are the one exception,** because the FHIR spec says ids are case-insensitive. Even then it only links when exactly one patient matches.
 - **The same person from two clinics.** Patients with the same name (ignoring case, accents and punctuation) and birth date are flagged as possible duplicates. They are never combined on the patient chart, because a wrong merge shows one person's health data to another. In research they count once, so a person is never counted twice. Every count shows `countWithoutDuplicates`, `countIncludingPossibleDuplicates` and `possibleDuplicatePatients`.
 - **SSNs are never used or returned.** The original record is kept as received, so every endpoint that returns raw JSON replaces any SSN with `[redacted]`.
-- **Duplicates are flagged, never deleted.** The patient app shows one primary record with a warning; the others stay in the database and are listed in `/data-quality/issues`.
+- **Duplicates are flagged, never deleted.** The patient app shows one primary record; the others stay in the database, and `/data-quality/issues` lists the whole group.
 - **Medical meaning is not judged.** The API checks structure and consistency. Whether a label like "History of MI" fits an active status, or whether a code and its label describe the same thing, needs clinical judgment.
 - **Logs skip query strings,** because they can contain health details.
 

@@ -19,7 +19,7 @@ show "List patients (search by name, filter by gender or birth date)" "/patients
 show "One patient (ids work in any capitalization)" "/patients/NOAH-WYLE"
 show "Conditions" "/patients/noah-wyle/conditions"
 show "Medications (note med-nw-003 was linked despite Patient/Noah-Wyle)" "/patients/noah-wyle/medications"
-show "A1c results (LOINC 4548-4); the conflicting duplicate shows a warning" "/patients/noah-wyle/observations?code=4548-4"
+show "A1c results (LOINC 4548-4); only one of the two conflicting duplicates is shown" "/patients/noah-wyle/observations?code=4548-4"
 show "Blood pressure (LOINC 85354-9), split into systolic and diastolic" "/patients/noah-wyle/observations?code=85354-9"
 show "Tracy's oxygen: only the amended 96% is shown (it replaced the original 94%)" "/patients/tracy-ifeachor/observations?code=59408-5"
 show "Procedures" "/patients/noah-wyle/procedures"
@@ -36,7 +36,7 @@ show "Dataset profile: patients, history depth, population" "/research/dataset-p
 # Data quality
 show "Data quality summary" "/data-quality/summary"
 show "All issues" "/data-quality/issues"
-show "Only warnings about patient links" "/data-quality/issues?type=UNKNOWN_PATIENT&includeRaw=true"
+show "Only problems with patient links" "/data-quality/issues?type=UNKNOWN_PATIENT&includeRaw=true"
 
 # Original FHIR record
 show "Original record, untouched" "/fhir/Observation/obs-nw-dup-001"
