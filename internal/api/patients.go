@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 )
@@ -401,7 +400,8 @@ type note struct {
 	Attachments []attachment `json:"attachments"`
 }
 
-// attachment is one file of a note, with its text when it's readable.
+// attachment is one file of a note, with its text when it's readable. In FHIR,
+// it either links to a Binary record or carries the file inline.
 type attachment struct {
 	BinaryID              string  `json:"binaryId"`
 	ContentType           *string `json:"contentType"`
@@ -441,8 +441,7 @@ func (s *Server) patientNotes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, notes)
 }
 
-// addAttachments fills in the files of every note in the list with one query.
-// When a file has no readable text, it says why.
+// attach binaries to note
 func (s *Server) addAttachments(notes []note) error {
 	if len(notes) == 0 {
 		return nil
@@ -454,9 +453,12 @@ func (s *Server) addAttachments(notes []note) error {
 		byID[notes[i].ID] = &notes[i]
 		ids[i] = notes[i].ID
 	}
-	rows, err := s.db.Query(`SELECT a.document_id, a.binary_id, b.id IS NOT NULL, b.content_type, b.size_bytes, b.text, b.data IS NOT NULL
-		FROM document_attachments a LEFT JOIN binaries b ON b.id = a.binary_id
-		WHERE a.document_id IN (`+placeholders(len(ids))+`) ORDER BY a.binary_id`, ids...)
+	rows, err := s.db.Query(`
+SELECT a.document_id, a.binary_id, b.id IS NOT NULL, b.content_type, b.size_bytes, b.text, b.data IS NOT NULL
+FROM document_attachments a 
+LEFT JOIN binaries b ON b.id = a.binary_id
+WHERE a.document_id IN (`+placeholders(len(ids))+`) 
+ORDER BY a.binary_id`, ids...)
 	if err != nil {
 		return err
 	}
@@ -482,66 +484,6 @@ func (s *Server) addAttachments(notes []note) error {
 		n.Attachments = append(n.Attachments, a)
 	}
 	return rows.Err()
-}
-
-// ---------- GET /patients/{id}/timeline ----------
-
-type event struct {
-	Date   *string `json:"date"`
-	Kind   string  `json:"kind"` // observation, condition, medication, procedure or note
-	ID     string  `json:"id"`
-	Title  string  `json:"title"`
-	Detail *string `json:"detail"`
-}
-
-// patientTimeline puts every visible record in one list, newest first.
-func (s *Server) patientTimeline(w http.ResponseWriter, r *http.Request) {
-	id := s.resolvePatient(w, r)
-	if id == "" {
-		return
-	}
-	rows, err := s.db.Query(`
-		SELECT o.measured_at, 'observation', o.id, coalesce(o.name, o.label, 'Observation'),
-		       CASE WHEN v.value IS NOT NULL THEN printf('%g', v.value) || coalesce(' ' || v.unit, '') ELSE v.value_text END
-		  FROM observations o LEFT JOIN observation_values v ON v.observation_id = o.id AND v.is_component = 0
-		  WHERE patient_id = ? AND `+visibleObservation+`
-		UNION ALL
-		SELECT onset_date, 'condition', id, coalesce(name, label, 'Unspecified condition'), clinical_status
-		  FROM conditions WHERE patient_id = ? AND coalesce(verification_status, '') <> 'entered-in-error'
-		UNION ALL
-		SELECT prescribed_at, 'medication', id, coalesce(name, label, 'Medication'), dosage
-		  FROM medications WHERE patient_id = ? AND coalesce(status, '') <> 'entered-in-error'
-		UNION ALL
-		SELECT performed_at, 'procedure', id, coalesce(name, label, 'Procedure'), status
-		  FROM procedures WHERE patient_id = ? AND coalesce(status, '') <> 'entered-in-error'
-		UNION ALL
-		SELECT date, 'note', id, coalesce(note_type, 'Note'), author
-		  FROM document_references WHERE patient_id = ? AND coalesce(status, '') <> 'entered-in-error'`,
-		id, id, id, id, id)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	defer rows.Close()
-	events := []event{}
-	for rows.Next() {
-		var e event
-		if err := rows.Scan(&e.Date, &e.Kind, &e.ID, &e.Title, &e.Detail); err != nil {
-			serverError(w, err)
-			return
-		}
-		events = append(events, e)
-	}
-
-	// Newest first; records without a date go last.
-	sort.SliceStable(events, func(i, j int) bool {
-		a, b := events[i].Date, events[j].Date
-		if a == nil || b == nil {
-			return a != nil
-		}
-		return *a > *b
-	})
-	writeJSON(w, http.StatusOK, events)
 }
 
 // ---------- Shared helpers ----------

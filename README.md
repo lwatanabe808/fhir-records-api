@@ -75,7 +75,6 @@ make test
 | `GET /patients/{id}/observations?code=&from=&to=` | Labs and vitals. `code` takes a LOINC code, like `4548-4` for A1c. Blood pressure comes back split into systolic and diastolic. |
 | `GET /patients/{id}/procedures` | Procedures |
 | `GET /patients/{id}/notes` | Notes with decoded text, or the reason text isn't available |
-| `GET /patients/{id}/timeline` | Every record in one list, newest first |
 
 The patient endpoints return clean data only. Records that shouldn't count as real data are never shown: entered in error, replaced by a correction, extra duplicates, and impossible values. They stay in the database. Every problem found while loading, and what was done about it, is listed in `/data-quality/issues` (filter by `recordId` to see one record's problems).
 
@@ -283,6 +282,7 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 - **Code checks against LOINC and SNOMED** through a terminology server, so a code that doesn't exist gets flagged. Today only the presence of a code and its code system is checked.
 - **Fetch web address attachments** from the source system using the patient's portal connection, and store large files in a private, encrypted S3 bucket, served through short-lived pre-signed URLs.
 - **More record types,** like Immunization and AllergyIntolerance, each with its own checks and clean table, so they can appear on the patient's chart.
+- **A combined timeline** of every record type for a patient, newest first.
 - **Searching a patient's note text,** and **research summaries** like patients per condition or lab value ranges across patients. The cohort search covers the counts partners ask for first.
 - **Matching people by identifiers** like SSN or medical record number, stored only as a keyed hash, to combine a person's records from several clinics into one chart.
 - **Picking the newest of several corrections** by `meta.lastUpdated`, and telling exact copies apart from duplicates with different values.

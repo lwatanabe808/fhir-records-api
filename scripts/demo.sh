@@ -24,7 +24,6 @@ show "Blood pressure (LOINC 85354-9), split into systolic and diastolic" "/patie
 show "Tracy's oxygen: only the amended 96% is shown (it replaced the original 94%)" "/patients/tracy-ifeachor/observations?code=59408-5"
 show "Procedures" "/patients/noah-wyle/procedures"
 show "Notes with decoded text" "/patients/noah-wyle/notes"
-show "Timeline, newest first" "/patients/noah-wyle/timeline"
 
 # Research partners (B2B)
 show "Cohort: diabetes with latest A1c (LOINC 4548-4) of 7 or more (de-identified)" "/research/cohort?condition=diabetes&lab=4548-4&labMin=7"
