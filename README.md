@@ -115,12 +115,12 @@ Partners describe the patients they need as **inclusion and exclusion criteria**
 
 ### Dataset profile
 
-`/research/dataset-profile` answers the questions partners ask to judge whether data is usable, before any cohort search. It matches what Novellia sells: long, complete patient histories.
+`/research/dataset-profile` answers the questions partners ask to judge whether data is usable, before any cohort search. It matches what Novellia sells: long, complete patient histories. It returns aggregates only; any population group smaller than `MIN_CELL_SIZE` shows as `<5`.
 
 | Question | Where it's answered |
 |---|---|
 | How long is each patient's history? | `history.yearsOfHistory`: median, min and max across patients |
-| How much data per patient? How current? | `history.datedRecordsPerPatient`, `history.yearsSinceLatestRecord` |
+| How much data per patient? How current? | `history.recordsPerPatient`, `history.yearsSinceLatestRecord` |
 | Who is in it? | `population`: age bands and gender, with groups under `MIN_CELL_SIZE` shown as `<5` |
 
 It reports medians, not means, because a few extreme patients would pull a mean off.

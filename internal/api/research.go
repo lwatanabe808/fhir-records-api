@@ -236,7 +236,6 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 		"limit":                            limit,
 		"offset":                           offset,
 		"patients":                         page,
-		"note":                             "De-identified: no names, ids or birth dates; ages over 89 shown as 90+; dates reduced to the year. Only usable records count.",
 	})
 }
 

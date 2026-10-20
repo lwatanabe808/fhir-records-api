@@ -45,7 +45,6 @@ func (s *Server) datasetProfile(w http.ResponseWriter, r *http.Request) {
 		"history":                             history,
 		"population":                          population,
 		"minCellSize":                         s.minCellSize,
-		"note":                                "Aggregates only. Population groups smaller than minCellSize are shown as \"<N\".",
 	})
 }
 
@@ -64,7 +63,6 @@ func (s *Server) historyStats() (map[string]any, error) {
 	defer rows.Close()
 	type span struct {
 		first, last time.Time
-		records     int
 	}
 	spans := map[string]*span{}
 	for rows.Next() {
@@ -78,10 +76,9 @@ func (s *Server) historyStats() (map[string]any, error) {
 		}
 		sp := spans[pid]
 		if sp == nil {
-			spans[pid] = &span{first: t, last: t, records: 1}
+			spans[pid] = &span{first: t, last: t}
 			continue
 		}
-		sp.records++
 		if t.Before(sp.first) {
 			sp.first = t
 		}
@@ -92,18 +89,45 @@ func (s *Server) historyStats() (map[string]any, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	var years, counts, sinceLast []float64
+	var years, sinceLast []float64
 	for _, sp := range spans {
 		years = append(years, sp.last.Sub(sp.first).Hours()/24/365.25)
-		counts = append(counts, float64(sp.records))
 		sinceLast = append(sinceLast, s.now().Sub(sp.last).Hours()/24/365.25)
 	}
+	counts, err := s.recordsPerPatient()
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
-		"patientsWithDatedRecords": len(spans),
+		"recordsPerPatient":        summary(counts),
+		"patientsWithDatedRecords": len(spans), // how many patients the two date numbers below are based on
 		"yearsOfHistory":           summary(years),
-		"datedRecordsPerPatient":   summary(counts),
 		"yearsSinceLatestRecord":   summary(sinceLast),
 	}, nil
+}
+
+// recordsPerPatient counts every record linked to each patient, dated or not.
+func (s *Server) recordsPerPatient() ([]float64, error) {
+	rows, err := s.db.Query(`SELECT
+		(SELECT COUNT(*) FROM observations WHERE patient_id = p.id) +
+		(SELECT COUNT(*) FROM conditions WHERE patient_id = p.id) +
+		(SELECT COUNT(*) FROM medications WHERE patient_id = p.id) +
+		(SELECT COUNT(*) FROM procedures WHERE patient_id = p.id) +
+		(SELECT COUNT(*) FROM document_references WHERE patient_id = p.id)
+		FROM patients p`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var counts []float64
+	for rows.Next() {
+		var n float64
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		counts = append(counts, n)
+	}
+	return counts, rows.Err()
 }
 
 // summary reports median and range, not the mean: a few outliers would pull a mean off.
