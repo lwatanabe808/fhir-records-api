@@ -15,17 +15,27 @@ type CodeableConcept struct {
 	Text string `json:"text"`
 }
 
-// First returns the first code and the label.
+// First returns the first code in the list that has a code, plus the free-text label.
 func (c CodeableConcept) First() Coding {
-	out := Coding{Text: c.Text}
-	if len(c.Coding) > 0 {
-		out.System, out.Code, out.Display = c.Coding[0].System, c.Coding[0].Code, c.Coding[0].Display
+	result := Coding{Text: c.Text} // start with just the label
+
+	for _, coding := range c.Coding { // go through each entry in the list
+		if coding.Code == "" {
+			continue // this entry has no code, try the next one
+		}
+		result.System = coding.System
+		result.Code = coding.Code
+		result.Display = coding.Display
+		break // found one, stop looking
 	}
-	return out
+
+	return result
 }
 
+// Reference is a link to another record, like {"reference": "Patient/p1"}.
 type Reference struct {
 	Reference string `json:"reference"`
+	Display   string `json:"display"` // a readable name, never used for linking
 }
 
 type Period struct {
@@ -36,11 +46,6 @@ type Meta struct {
 	LastUpdated string `json:"lastUpdated"`
 }
 
-type Identifier struct {
-	System string `json:"system"`
-	Value  string `json:"value"`
-}
-
 type HumanName struct {
 	Family string   `json:"family"`
 	Given  []string `json:"given"` // first and middle names
@@ -48,12 +53,11 @@ type HumanName struct {
 }
 
 type Patient struct {
-	Name             []HumanName  `json:"name"`
-	Gender           string       `json:"gender"`
-	BirthDate        string       `json:"birthDate"`
-	DeceasedDateTime string       `json:"deceasedDateTime"`
-	Active           *bool        `json:"active"` // nil when missing
-	Identifier       []Identifier `json:"identifier"`
+	Name             []HumanName `json:"name"`
+	Gender           string      `json:"gender"`
+	BirthDate        string      `json:"birthDate"`
+	DeceasedDateTime string      `json:"deceasedDateTime"`
+	Active           *bool       `json:"active"` // nil when missing
 }
 
 // Value holds the value fields we read from an observation or a component.
@@ -89,6 +93,7 @@ type Component struct {
 }
 
 type Observation struct {
+	Subject           *Reference      `json:"subject"` // the patient link; nil when missing
 	Status            string          `json:"status"`
 	Code              CodeableConcept `json:"code"`
 	EffectiveDateTime string          `json:"effectiveDateTime"`
@@ -100,6 +105,7 @@ type Observation struct {
 }
 
 type Condition struct {
+	Subject            *Reference      `json:"subject"` // the patient link; nil when missing
 	Code               CodeableConcept `json:"code"`
 	ClinicalStatus     CodeableConcept `json:"clinicalStatus"`
 	VerificationStatus CodeableConcept `json:"verificationStatus"`
@@ -107,6 +113,7 @@ type Condition struct {
 }
 
 type MedicationRequest struct {
+	Subject                   *Reference      `json:"subject"` // the patient link; nil when missing
 	Status                    string          `json:"status"`
 	Intent                    string          `json:"intent"`
 	MedicationCodeableConcept CodeableConcept `json:"medicationCodeableConcept"`
@@ -118,6 +125,7 @@ type MedicationRequest struct {
 }
 
 type Procedure struct {
+	Subject           *Reference      `json:"subject"` // the patient link; nil when missing
 	Status            string          `json:"status"`
 	Code              CodeableConcept `json:"code"`
 	PerformedDateTime string          `json:"performedDateTime"`
@@ -134,6 +142,7 @@ type Attachment struct {
 }
 
 type DocumentReference struct {
+	Subject *Reference      `json:"subject"` // the patient link; nil when missing
 	Status  string          `json:"status"`
 	Type    CodeableConcept `json:"type"`
 	Date    string          `json:"date"`

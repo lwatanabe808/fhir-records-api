@@ -20,7 +20,7 @@ func insertDocumentReference(rec *recordCtx) error {
 	var d fhir.DocumentReference
 	rec.decode(&d)
 
-	patientRef, err := rec.patientRef()
+	patientRef, err := rec.patientRef(d.Subject)
 	if err != nil {
 		return err
 	}

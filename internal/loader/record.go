@@ -37,42 +37,44 @@ func (rec *recordCtx) issue(issueType, severity, field, detail, action string) e
 	})
 }
 
-// patientRef reads the patient link and checks its format.
-// It returns "Patient/<id>" or "". The link itself is checked in pass 2,
-// because the patient may appear later in the file.
-func (rec *recordCtx) patientRef() (string, error) {
-	field := fhir.SubjectField(rec.r)
-	if field == "" {
-		return "", rec.issue(NoPatientLink, Warning, "subject", "record has no patient link", "left unlinked")
-	}
-	if rec.flagged[field] || rec.flagged[field+"/reference"] {
+// patientRef checks the patient link and returns "Patient/<id>", or "".
+// Whether that patient exists is checked in pass 2, because the patient may
+// appear later in the file.
+func (rec *recordCtx) patientRef(subject *fhir.Reference) (string, error) {
+	if rec.flagged["subject"] || rec.flagged["subject/reference"] {
 		return "", nil // the schema check already reported a badly shaped link
 	}
-	subject, isObject := rec.r[field].(map[string]any)
-	if !isObject {
-		return "", rec.issue(InvalidReference, Warning, field, "patient link must be an object", "left unlinked")
+	raw, present := rec.r["subject"]
+	if !present {
+		return "", rec.issue(NoPatientLink, Warning, "subject", "record has no patient link", "left unlinked")
 	}
-	ref, _ := subject["reference"].(string)
-	if ref == "" {
+	// The schema check doesn't catch a link written as plain text ("subject": "Patient/p1")
+	// or null, and the struct can't tell those apart from an empty link, so the shape
+	// is checked on the raw record.
+	if _, isObject := raw.(map[string]any); !isObject || subject == nil {
+		return "", rec.issue(InvalidReference, Warning, "subject", "patient link must be an object", "left unlinked")
+	}
+	if subject.Reference == "" {
 		detail := "patient link has no reference"
-		if name, _ := subject["display"].(string); name != "" {
-			detail = fmt.Sprintf("patient link has only a name (%q), which is not unique", name)
+		if subject.Display != "" {
+			detail = fmt.Sprintf("patient link has only a name (%q), which is not unique", subject.Display)
 		}
-		return "", rec.issue(NoPatientLink, Warning, field, detail, "left unlinked, never matched by name")
+		return "", rec.issue(NoPatientLink, Warning, "subject", detail, "left unlinked, never matched by name")
 	}
-	refType, _, ok := fhir.ParseRef(ref)
+	refType, _, ok := fhir.ParseRef(subject.Reference)
 	if !ok {
-		return "", rec.issue(InvalidReference, Warning, field+".reference", fmt.Sprintf("%q is not in the form Patient/<id>", ref), "left unlinked")
+		return "", rec.issue(InvalidReference, Warning, "subject.reference", fmt.Sprintf("%q is not in the form Patient/<id>", subject.Reference), "left unlinked")
 	}
 	if refType != "Patient" {
-		return "", rec.issue(InvalidReference, Warning, field+".reference", fmt.Sprintf("%q does not point to a patient", ref), "left unlinked")
+		return "", rec.issue(InvalidReference, Warning, "subject.reference", fmt.Sprintf("%q does not point to a patient", subject.Reference), "left unlinked")
 	}
-	return ref, nil
+	return subject.Reference, nil
 }
 
 // code checks a CodeableConcept (a lab test, disease, procedure or drug code)
 // and reports a missing code or a missing code system.
 func (rec *recordCtx) code(field, what string, concept fhir.CodeableConcept) (fhir.Coding, error) {
+	// finds the first code that has a code
 	c := concept.First()
 	if c.Code == "" {
 		detail := fmt.Sprintf("no %s", what)

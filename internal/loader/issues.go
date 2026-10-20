@@ -31,7 +31,6 @@ const (
 	MissingUnit       = "MISSING_UNIT"
 	EmptyList         = "EMPTY_LIST"
 	ImpossibleValue   = "IMPOSSIBLE_VALUE"
-	InvalidSSN        = "INVALID_SSN"
 
 	// Binaries and attachments
 	InvalidBinary            = "INVALID_BINARY"
@@ -52,8 +51,6 @@ const (
 	DuplicateRecord          = "DUPLICATE_RECORD"
 	Superseded               = "SUPERSEDED"
 	PossibleDuplicatePatient = "POSSIBLE_DUPLICATE_PATIENT"
-	SamePersonBySSN          = "SAME_PERSON_BY_SSN"
-	SSNConflict              = "SSN_CONFLICT"
 )
 
 // Severity levels.

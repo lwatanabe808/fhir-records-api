@@ -53,7 +53,6 @@ make test
 | `MAX_BINARY_MB` | `5` | Decoded attachments over this size are not stored |
 | `MAX_RECORD_MB` | `10` | Non-Binary lines over this size are not processed |
 | `PATIENT_ID_SECRET` | dev default | Key for the de-identified research ids. Set it in any real environment. |
-| `SSN_SECRET` | dev default | Key used to hash Social Security numbers before they are stored. Set it in any real environment. |
 | `MIN_CELL_SIZE` | `5` | Research counts below this show as `<5` (condition counts, lab summaries, dataset profile). The sample has only 16 patients, so most groups are hidden; use `MIN_CELL_SIZE=1` to see every number in a demo. |
 
 ## Who uses this API
@@ -78,7 +77,6 @@ make test
 | `GET /patients/{id}/procedures` | Procedures |
 | `GET /patients/{id}/notes?q=` | Notes with decoded text, or the reason text isn't available. `q` searches this patient's note text. |
 | `GET /patients/{id}/timeline` | Every record in one list, newest first |
-| `GET /patients/{id}/records?type=` | Original FHIR records of any type, including types without a clean table yet |
 
 Each list also has a single record endpoint, for example `GET /patients/{id}/observations/{recordId}`. It returns the record even if it would be hidden, and a 404 if the record belongs to another patient.
 
@@ -149,7 +147,7 @@ Principles:
 - **Keep everything.** Every line is stored as received in `raw_resources`, and every clean row points back to it with `raw_resource_id`.
 - **Clean tables only hold valid values.** An invalid value is stored as null in the clean table, the original is kept in `raw_resources`, and an issue explains the difference.
 - **Strict about linking, relaxed about loading.** A record is loaded even if its patient link is broken, but it is never attached to a patient by guessing.
-- **A type is supported only if it has rules.** Other valid FHIR types are stored raw and reachable through `/patients/{id}/records`.
+- **A type is supported only if it has rules.** Other valid FHIR types are stored raw for the data team (`/fhir/{type}/{id}`), but never shown in the patient app, because they were never checked.
 
 ## Data model
 
@@ -201,7 +199,7 @@ Each case below is covered by a test in [internal/loader/loader_test.go](interna
 | 18 | More than one value in an Observation | Own check | Keep the first, in a fixed order | `MULTIPLE_VALUES` | warning |
 | 19 | Number with no unit | Own check | Unit null | `MISSING_UNIT` | warning |
 | 20 | Empty list (e.g. dosage) | Own check (the schema allows it) | Stored as null | `EMPTY_LIST` | warning |
-| 21 | Impossible value: negative, over 100%, dated in the future, before birth, after death | Own check | Hidden by default, excluded from research | `IMPOSSIBLE_VALUE` | error |
+| 21 | Impossible value: negative, over 100%, dated in the future | Own check | Hidden by default, excluded from research | `IMPOSSIBLE_VALUE` | error |
 | 23 | Unexpected error in my code on one record | Recover | Keep going | `PROCESSING_ERROR` | error |
 | **Binaries and attachments** |||||
 | 24 | Inline attachment (`data` in the note) | Own check | Normal case: stored in `binaries` with a generated id | none | |
@@ -221,13 +219,9 @@ Each case below is covered by a test in [internal/loader/loader_test.go](interna
 | 37 | Binary no note links to | Pass 2 | Kept, on no chart | `ORPHAN_BINARY` | info |
 | 38 | Same type and id, identical | Pass 1 | Copy skipped | `DUPLICATE_ID` | info |
 | 39 | Same type and id, changed | Pass 1 | Later version wins (unless `meta.lastUpdated` says otherwise). Older versions stay in `raw_resources` and are listed by `/fhir/{type}/{id}/history` | `DUPLICATE_ID_CHANGED` | warning |
-| 40 | Different ids, same patient, test and exact time, different values | Pass 2 | Lowest id is primary, others hidden | `DUPLICATE_RECORD` | warning |
-| 41 | Same as 40, same values | Pass 2 | Lowest id is primary, others hidden | `DUPLICATE_RECORD` | info |
-| 42 | Amended or corrected reading | Pass 2 | Replaces the original (`replaced_by`) | `SUPERSEDED` | info |
+| 40 | Different ids, same patient, test and exact time | Pass 2 | Lowest id is primary, others hidden (same or different values) | `DUPLICATE_RECORD` | warning |
+| 42 | Amended or corrected reading | Pass 2 | Replaces the others in its group (`replaced_by`). Several corrections: the lowest id wins | `SUPERSEDED` | info |
 | 43 | Same name and birth date (ignoring case, accents and punctuation), different patient ids | Pass 2 | Separate charts, counted once in research | `POSSIBLE_DUPLICATE_PATIENT` | warning |
-| 43a | Same SSN, and name and birth date agree | Pass 2 | Combined into one chart (shared `person_id`), counted once | `SAME_PERSON_BY_SSN` | info |
-| 43b | Same SSN, but name or birth date disagree | Pass 2 | Separate charts, counted once in research | `SSN_CONFLICT` | warning |
-| 43c | SSN is a placeholder, fake, partial (last 4) or not 9 digits | Pass 1 | Not used for matching | `INVALID_SSN` | warning |
 
 **Valid records with special handling (no issue logged):**
 
@@ -252,11 +246,11 @@ Besides the sample file, [testdata/scenarios](testdata/scenarios) has input file
 | `05-pretty-printed` | One record spread over many lines | Fragments flagged, records around it load |
 | `06-unsupported-types` | Encounter, Immunization, Bundle, a misspelled type | Kept raw, still found by patient |
 | `07-patient-links` | Ids that differ only by capital letters, links to groups and web addresses, empty links | Ambiguous links never guessed |
-| `08-dates` | Partial dates, time zones, same day with no time, after death, February 30 | Date-only readings not treated as duplicates |
+| `08-dates` | Partial dates, time zones, same day with no time, February 30 | Date-only readings not treated as duplicates |
 | `09-two-clinics` | Same person from two clinics, repeated and corrected records, `meta.lastUpdated` | Patients never merged, newest version kept |
 | `10-attachments` | PDF, HTML, inline data, a Binary shared by two notes, an image labeled as text | Each stored with the right type and text |
 | `11-values` | Other units, zero, negative, huge, wrong types, a missing value with a reason | Impossible hidden, every missing value logged |
-| `13-identifiers` | Same SSN across clinics, SSN conflict, placeholder, partial and fake SSNs, accented names | One combined chart, one conflict, SSNs never returned |
+| `13-identifiers` | Records with SSNs, accented and punctuated names | Same name and birth date flagged, SSNs never returned |
 | `12-bulk` | 22,000 records (built by `make scenarios`, not kept in git) | Loads in about 3 seconds |
 
 ## Key decisions and tradeoffs
@@ -267,16 +261,8 @@ Besides the sample file, [testdata/scenarios](testdata/scenarios) has input file
 - **The official FHIR schema, plus my own checks.** The schema catches format problems in one step, including ones I didn't think of. But it can't see links between records, and it allows several things FHIR says are wrong (empty lists, any string as base64, a missing Binary content type, a plain string as a patient link), so those are my own checks.
 - **Never guess a patient.** Linking by name, or attaching `Patient/nwyle` to Noah, risks putting health data on the wrong person. An unlinked record is visible and fixable; a wrong link is invisible.
 - **Capital letters are the one exception,** because the FHIR spec says ids are case-insensitive. Even then it only links when exactly one patient matches.
-- **Matching people across clinics.** The patient chart and research counts treat the same evidence differently on purpose:
-
-  | Evidence | Patient chart | Research count |
-  |---|---|---|
-  | Same SSN, and name and birth date agree | Combined | Once |
-  | Same SSN, but name or birth date disagree | Separate, `SSN_CONFLICT` | Once (possible duplicate) |
-  | Same name and birth date only | Separate, `POSSIBLE_DUPLICATE_PATIENT` | Once (possible duplicate) |
-
-  The chart only combines on strong evidence, because a wrong merge shows one person's health data to another. Research counts lean the other way, so a person is never counted twice. Every count shows `countWithoutDuplicates`, `countIncludingPossibleDuplicates` and `possibleDuplicatePatients`, and `/patients/{id}` lists `linkedPatientIds`.
-- **SSNs are never stored or returned.** The loader keeps only a keyed hash (HMAC with `SSN_SECRET`) for matching. The original record is kept as received, so every endpoint that returns raw JSON replaces the SSN with `[redacted]`.
+- **The same person from two clinics.** Patients with the same name (ignoring case, accents and punctuation) and birth date are flagged as possible duplicates. They are never combined on the patient chart, because a wrong merge shows one person's health data to another. In research they count once, so a person is never counted twice. Every count shows `countWithoutDuplicates`, `countIncludingPossibleDuplicates` and `possibleDuplicatePatients`.
+- **SSNs are never used or returned.** The original record is kept as received, so every endpoint that returns raw JSON replaces any SSN with `[redacted]`.
 - **Duplicates are flagged, never deleted.** The clean view shows one primary record with a warning, and the others are one parameter away.
 - **Medical meaning is not judged.** The API checks structure and consistency. Whether a label like "History of MI" fits an active status, or whether a code and its label describe the same thing, needs clinical judgment.
 - **Logs skip query strings,** because they can contain health details.
@@ -305,6 +291,10 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 - **Exact decimals.** Lab values are stored as floating point numbers, which is fine for filtering and display but drops FHIR's decimal precision (`7.80` vs `7.8`). The original text is kept in `raw_resources`; a clean column for it would be next.
 - **Code checks against LOINC and SNOMED** through a terminology server, so a code that doesn't exist gets flagged. Today only the presence of a code and its code system is checked.
 - **Fetch web address attachments** from the source system using the patient's portal connection, and store large files in a private, encrypted S3 bucket, served through short-lived pre-signed URLs.
+- **More record types,** like Immunization and AllergyIntolerance, each with its own checks and clean table, so they can appear on the patient's chart.
+- **Matching people by identifiers** like SSN or medical record number, stored only as a keyed hash, to combine a person's records from several clinics into one chart.
+- **Picking the newest of several corrections** by `meta.lastUpdated`, and telling exact copies apart from duplicates with different values.
+- **Dates checked against the patient's life:** a measurement dated before the patient was born or after they died.
 - **Cross-checks between values,** like a blood pressure whose systolic (top) number isn't higher than its diastolic (bottom) number.
 - **Implausible values** (possible, but likely a typo, like an A1c of 78%): ranges per lab test, reviewed by a clinician, or learned from the data with percentiles rather than means, which outliers distort.
 - **Code and label checks** using medical synonym data or an LLM that flags suspicious pairs for a person to review.

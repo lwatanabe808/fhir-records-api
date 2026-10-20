@@ -7,14 +7,11 @@ CREATE TABLE raw_resources (
   id            INTEGER PRIMARY KEY,   -- equals the line number in the file
   resource_type TEXT,
   fhir_id       TEXT,
-  patient_ref   TEXT,                  -- patient link as written, for any type
-  patient_id    TEXT,                  -- resolved patient, set in pass 2
   parsed_ok     INTEGER NOT NULL,
   raw_json      TEXT,                  -- original JSON when it parsed
   raw_text      TEXT                   -- original text when it did not parse
 );
 CREATE INDEX idx_raw_type_id ON raw_resources(resource_type, fhir_id);
-CREATE INDEX idx_raw_patient ON raw_resources(patient_id);
 
 CREATE TABLE patients (
   id              TEXT PRIMARY KEY,
@@ -26,12 +23,8 @@ CREATE TABLE patients (
   birth_date      TEXT,
   deceased_date   TEXT,
   active          INTEGER,
-  name_key        TEXT,     -- normalized name, for matching
-  ssn_hash        TEXT,     -- keyed hash of a valid SSN; the number itself is never stored here
-  person_id       TEXT      -- patients confirmed as the same person share this (set in pass 2)
+  name_key        TEXT      -- name ignoring case, accents and punctuation, for spotting duplicates
 );
-CREATE INDEX idx_patient_ssn ON patients(ssn_hash);
-CREATE INDEX idx_patient_person ON patients(person_id);
 CREATE INDEX idx_patient_name_birth ON patients(name_key, birth_date);
 CREATE INDEX idx_patient_birth ON patients(birth_date);
 CREATE INDEX idx_patient_family ON patients(family_name, given_names);

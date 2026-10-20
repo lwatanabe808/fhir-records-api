@@ -9,7 +9,7 @@ import (
 
 // redactRaw masks SSNs in an original FHIR record before it leaves the API.
 // raw_resources keeps the record exactly as received, so every endpoint that
-// returns raw JSON (/fhir, /records, issues with includeRaw) passes it
+// returns raw JSON (/fhir and issues with includeRaw) passes it
 // through here. Records without an SSN are returned unchanged, byte for byte.
 func redactRaw(raw string) string {
 	if !strings.Contains(raw, loader.SSNSystem) {

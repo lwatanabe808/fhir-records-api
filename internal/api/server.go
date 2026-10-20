@@ -62,7 +62,6 @@ func NewServer(db *sql.DB, summary loader.Summary, opts Options) http.Handler {
 	mux.HandleFunc("GET /patients/{id}/notes", s.patientNotes)
 	mux.HandleFunc("GET /patients/{id}/notes/{recordId}", s.patientNotes)
 	mux.HandleFunc("GET /patients/{id}/timeline", s.patientTimeline)
-	mux.HandleFunc("GET /patients/{id}/records", s.patientRawRecords)
 
 	// Research partners (B2B)
 	mux.HandleFunc("GET /research/cohort", s.cohort)

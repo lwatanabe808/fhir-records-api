@@ -29,8 +29,6 @@ func main() {
 	minCellSize := envInt("MIN_CELL_SIZE", 5) // default 5
 	// secret for hashing patient ids into the ids research partners see
 	patientIDSecret := secretEnv("PATIENT_ID_SECRET")
-	// secret for hashing SSNs, used to match people across clinics
-	ssnSecret := secretEnv("SSN_SECRET")
 
 	schema, err := validate.NewSchema(loader.SupportedTypes())
 	if err != nil {
@@ -47,7 +45,6 @@ func main() {
 	summary, err := loader.LoadFile(context.Background(), db, dataFile, schema, loader.Config{
 		MaxBinaryBytes: maxBinaryMB * 1_000_000,
 		MaxRecordBytes: maxRecordMB * 1_000_000,
-		SSNSecret:      []byte(ssnSecret),
 	})
 	if err != nil {
 		log.Fatalf("load data: %v", err)

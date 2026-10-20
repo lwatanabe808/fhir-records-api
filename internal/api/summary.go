@@ -21,7 +21,7 @@ func (s *Server) patientSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conditions, err := s.rows(`SELECT id, coalesce(name, label, 'Unspecified condition'), onset_date FROM conditions
-		WHERE `+ofPerson+` AND clinical_status IN ('active', 'recurrence', 'relapse')
+		WHERE patient_id = ? AND clinical_status IN ('active', 'recurrence', 'relapse')
 		  AND coalesce(verification_status, '') NOT IN ('refuted', 'entered-in-error')
 		ORDER BY onset_date DESC`, []string{"id", "condition", "onset"}, id)
 	if err != nil {
@@ -29,7 +29,7 @@ func (s *Server) patientSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	medications, err := s.rows(`SELECT id, coalesce(name, label), dosage, prescribed_at FROM medications
-		WHERE `+ofPerson+` AND status = 'active' ORDER BY prescribed_at DESC`,
+		WHERE patient_id = ? AND status = 'active' ORDER BY prescribed_at DESC`,
 		[]string{"id", "medication", "dosage", "prescribedAt"}, id)
 	if err != nil {
 		serverError(w, err)
@@ -39,7 +39,7 @@ func (s *Server) patientSummary(w http.ResponseWriter, r *http.Request) {
 	labs, err := s.rows(`SELECT id, test, code, date FROM (
 			SELECT id, coalesce(name, label) AS test, lab_test_code AS code, measured_at AS date,
 			       ROW_NUMBER() OVER (PARTITION BY coalesce(code_system, ''), lab_test_code ORDER BY measured_at DESC, id) AS rn
-			FROM observations WHERE `+ofPerson+` AND lab_test_code IS NOT NULL AND `+visibleObservation+`)
+			FROM observations WHERE patient_id = ? AND lab_test_code IS NOT NULL AND `+visibleObservation+`)
 		WHERE rn = 1 ORDER BY test`, []string{"id", "test", "code", "date"}, id)
 	if err != nil {
 		serverError(w, err)
@@ -52,7 +52,7 @@ func (s *Server) patientSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	procedures, err := s.rows(`SELECT id, coalesce(name, label), performed_at FROM procedures
-		WHERE `+ofPerson+` AND coalesce(status, '') <> 'entered-in-error'
+		WHERE patient_id = ? AND coalesce(status, '') <> 'entered-in-error'
 		ORDER BY performed_at DESC LIMIT 3`, []string{"id", "procedure", "performedAt"}, id)
 	if err != nil {
 		serverError(w, err)
@@ -62,18 +62,18 @@ func (s *Server) patientSummary(w http.ResponseWriter, r *http.Request) {
 	// How many problems were found in this patient's records.
 	var issues int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM issues WHERE raw_resource_id IN (
-			SELECT raw_resource_id FROM patients WHERE person_id = (SELECT person_id FROM patients WHERE id = ?)
-			UNION SELECT raw_resource_id FROM observations WHERE `+ofPerson+`
-			UNION SELECT raw_resource_id FROM conditions WHERE `+ofPerson+`
-			UNION SELECT raw_resource_id FROM medications WHERE `+ofPerson+`
-			UNION SELECT raw_resource_id FROM procedures WHERE `+ofPerson+`
-			UNION SELECT raw_resource_id FROM document_references WHERE `+ofPerson+`)`,
+			SELECT raw_resource_id FROM patients WHERE id = ?
+			UNION SELECT raw_resource_id FROM observations WHERE patient_id = ?
+			UNION SELECT raw_resource_id FROM conditions WHERE patient_id = ?
+			UNION SELECT raw_resource_id FROM medications WHERE patient_id = ?
+			UNION SELECT raw_resource_id FROM procedures WHERE patient_id = ?
+			UNION SELECT raw_resource_id FROM document_references WHERE patient_id = ?)`,
 		id, id, id, id, id, id).Scan(&issues); err != nil {
 		serverError(w, err)
 		return
 	}
 	var notes int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM document_references WHERE `+ofPerson+` AND coalesce(status, '') <> 'entered-in-error'`, id).Scan(&notes); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM document_references WHERE patient_id = ? AND coalesce(status, '') <> 'entered-in-error'`, id).Scan(&notes); err != nil {
 		serverError(w, err)
 		return
 	}

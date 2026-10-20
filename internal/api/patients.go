@@ -2,7 +2,6 @@ package api
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -15,11 +14,6 @@ import (
 // Default views hide records that shouldn't count as real data (entered in
 // error, replaced by a correction, duplicates, impossible values).
 // ?includeHidden=true shows everything, with the reason it would be hidden.
-
-// ofPerson matches records from every patient record of the same person as
-// patient ?. Records confirmed as one person (same SSN, name and birth date)
-// share a person_id, so the chart shows them together.
-const ofPerson = `patient_id IN (SELECT id FROM patients WHERE person_id = (SELECT person_id FROM patients WHERE id = ?))`
 
 // visibleObservation matches what the default observation views show.
 const visibleObservation = `is_primary = 1 AND replaced_by IS NULL AND is_impossible = 0
@@ -82,7 +76,7 @@ func (s *Server) newRecordList(w http.ResponseWriter, r *http.Request, selectFro
 	if paramError(w, err) {
 		return nil, false
 	}
-	list = &recordList{query: selectFrom + ` WHERE ` + ofPerson, args: []any{id}, includeHidden: includeHidden}
+	list = &recordList{query: selectFrom + ` WHERE patient_id = ?`, args: []any{id}, includeHidden: includeHidden}
 	// GET .../{recordId} returns one record, even if it would be hidden.
 	if recordID := r.PathValue("recordId"); recordID != "" {
 		list.single, list.includeHidden = true, true
@@ -255,7 +249,7 @@ func (s *Server) getPatient(w http.ResponseWriter, r *http.Request) {
 	for key, table := range map[string]string{"conditions": "conditions", "medications": "medications",
 		"observations": "observations", "procedures": "procedures", "notes": "document_references"} {
 		var n int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE `+ofPerson, id).Scan(&n); err != nil {
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE patient_id = ?`, id).Scan(&n); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -265,17 +259,10 @@ func (s *Server) getPatient(w http.ResponseWriter, r *http.Request) {
 	if active.Valid {
 		activeV = active.Bool
 	}
-	// Other patient records confirmed as the same person (same SSN, name and
-	// birth date). Their records are shown on this chart too.
-	linked, err := s.stringList(`SELECT id FROM patients WHERE person_id = (SELECT person_id FROM patients WHERE id = ?) AND id <> ? ORDER BY id`, id, id)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": id, "name": nullStr(name), "familyName": nullStr(family), "givenNames": nullStr(given),
 		"gender": nullStr(gender), "birthDate": nullStr(birth), "age": ageOn(birth.String, s.now()),
-		"active": activeV, "linkedPatientIds": linked, "recordCounts": counts, "warnings": emptyIfNil(warns[raw]),
+		"active": activeV, "recordCounts": counts, "warnings": emptyIfNil(warns[raw]),
 	})
 }
 
@@ -649,19 +636,19 @@ func (s *Server) patientTimeline(w http.ResponseWriter, r *http.Request) {
 		SELECT o.measured_at, 'observation', o.id, coalesce(o.name, o.label, 'Observation'),
 		       CASE WHEN v.value IS NOT NULL THEN printf('%g', v.value) || coalesce(' ' || v.unit, '') ELSE v.value_text END
 		  FROM observations o LEFT JOIN observation_values v ON v.observation_id = o.id AND v.is_component = 0
-		  WHERE `+ofPerson+` AND `+visibleObservation+`
+		  WHERE patient_id = ? AND `+visibleObservation+`
 		UNION ALL
 		SELECT onset_date, 'condition', id, coalesce(name, label, 'Unspecified condition'), clinical_status
-		  FROM conditions WHERE `+ofPerson+` AND coalesce(verification_status, '') <> 'entered-in-error'
+		  FROM conditions WHERE patient_id = ? AND coalesce(verification_status, '') <> 'entered-in-error'
 		UNION ALL
 		SELECT prescribed_at, 'medication', id, coalesce(name, label, 'Medication'), dosage
-		  FROM medications WHERE `+ofPerson+` AND coalesce(status, '') <> 'entered-in-error'
+		  FROM medications WHERE patient_id = ? AND coalesce(status, '') <> 'entered-in-error'
 		UNION ALL
 		SELECT performed_at, 'procedure', id, coalesce(name, label, 'Procedure'), status
-		  FROM procedures WHERE `+ofPerson+` AND coalesce(status, '') <> 'entered-in-error'
+		  FROM procedures WHERE patient_id = ? AND coalesce(status, '') <> 'entered-in-error'
 		UNION ALL
 		SELECT date, 'note', id, coalesce(note_type, 'Note'), author
-		  FROM document_references WHERE `+ofPerson+` AND coalesce(status, '') <> 'entered-in-error'`,
+		  FROM document_references WHERE patient_id = ? AND coalesce(status, '') <> 'entered-in-error'`,
 		id, id, id, id, id)
 	if err != nil {
 		serverError(w, err)
@@ -688,40 +675,6 @@ func (s *Server) patientTimeline(w http.ResponseWriter, r *http.Request) {
 		return di > dj
 	})
 	writeJSON(w, http.StatusOK, events)
-}
-
-// ---------- GET /patients/{id}/records ----------
-
-// Raw records of any type for this patient, including types without a clean
-// table yet (for example Immunization). Filter with ?type=.
-func (s *Server) patientRawRecords(w http.ResponseWriter, r *http.Request) {
-	id := s.resolvePatient(w, r)
-	if id == "" {
-		return
-	}
-	q := `SELECT id, resource_type, raw_json FROM raw_resources WHERE ` + ofPerson + ` AND raw_json IS NOT NULL`
-	args := []any{id}
-	if t := r.URL.Query().Get("type"); t != "" {
-		q += ` AND resource_type = ?`
-		args = append(args, t)
-	}
-	rows, err := s.db.Query(q+` ORDER BY id`, args...)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	defer rows.Close()
-	out := []map[string]any{}
-	for rows.Next() {
-		var line int64
-		var rt, raw string
-		if err := rows.Scan(&line, &rt, &raw); err != nil {
-			serverError(w, err)
-			return
-		}
-		out = append(out, map[string]any{"line": line, "resourceType": rt, "format": "raw", "resource": json.RawMessage(redactRaw(raw))})
-	}
-	writeJSON(w, http.StatusOK, out)
 }
 
 // likeEscape makes % and _ in user text match literally in a LIKE pattern.

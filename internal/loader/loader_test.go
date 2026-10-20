@@ -96,7 +96,6 @@ func TestMessyFile(t *testing.T) {
 		{"o-nounit", MissingUnit},
 		{"o-o2", ImpossibleValue},
 		{"o-future", ImpossibleValue},
-		{"o-prebirth", ImpossibleValue},
 		{"m-empty", EmptyList},
 		{"o-case", CaseMismatchReference},
 		{"o-unknown", UnknownPatient},
@@ -166,7 +165,7 @@ func TestMessyFile(t *testing.T) {
 		{"too large: no data", `SELECT data FROM binaries WHERE id = 'b-big'`, ""},
 		{"broken binary link kept", `SELECT COUNT(*) FROM document_attachments WHERE binary_id = 'b-missing'`, "1"},
 		{"web address not linked", `SELECT COUNT(*) FROM document_attachments WHERE document_id = 'd1'`, "8"},
-		{"unsupported type reachable by patient", `SELECT patient_id FROM raw_resources WHERE fhir_id = 'imm1'`, "p1"},
+		{"unsupported type kept raw", `SELECT COUNT(*) FROM raw_resources WHERE fhir_id = 'imm1' AND raw_json IS NOT NULL`, "1"},
 		{"non-FHIR type raw only", `SELECT COUNT(*) FROM raw_resources WHERE fhir_id = 'cn1'`, "1"},
 		{"invalid JSON kept as text", `SELECT COUNT(*) FROM raw_resources WHERE parsed_ok = 0`, "1"},
 		{"duplicate patients never merged", `SELECT COUNT(*) FROM patients`, "2"},
@@ -182,12 +181,11 @@ func TestMessyFile(t *testing.T) {
 	if g := scalar(t, db, `SELECT COUNT(DISTINCT group_key) FROM issues WHERE record_id IN ('o-g1', 'o-g2')`); g.String != "1" {
 		t.Errorf("o-g1 and o-g2 should share one group key, got %s", g.String)
 	}
-	// Same values: info. Different values: warning.
-	if s := scalar(t, db, `SELECT severity FROM issues WHERE record_id = 'o-s1' AND issue_type = ?`, DuplicateRecord); s.String != Info {
-		t.Errorf("same-value duplicate severity = %s, want info", s.String)
-	}
-	if s := scalar(t, db, `SELECT severity FROM issues WHERE record_id = 'o-g1' AND issue_type = ?`, DuplicateRecord); s.String != Warning {
-		t.Errorf("different-value duplicate severity = %s, want warning", s.String)
+	// Every duplicate is a warning, whether or not the values match.
+	for _, id := range []string{"o-s1", "o-g1"} {
+		if s := scalar(t, db, `SELECT severity FROM issues WHERE record_id = ? AND issue_type = ?`, id, DuplicateRecord); s.String != Warning {
+			t.Errorf("%s duplicate severity = %s, want warning", id, s.String)
+		}
 	}
 }
 

@@ -132,7 +132,7 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 	add(excludeCondition, conditionMatch, false)
 	add(excludeMedication, medicationMatch, false)
 	add(excludeProcedure, procedureMatch, false)
-	rows, err := s.db.Query(`SELECT p.id, p.gender, p.birth_date FROM patients p WHERE p.id = p.person_id AND `+strings.Join(where, " AND ")+` ORDER BY p.id`, args...)
+	rows, err := s.db.Query(`SELECT p.id, p.gender, p.birth_date FROM patients p WHERE `+strings.Join(where, " AND ")+` ORDER BY p.id`, args...)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -244,12 +244,12 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 // Matchers for inclusion and exclusion criteria. Each takes the value three
 // times: an exact code, then a name and a label containing the text.
 const (
-	conditionMatch = `SELECT 1 FROM conditions c WHERE c.patient_id IN (SELECT q.id FROM patients q WHERE q.person_id = p.person_id) AND ` + usableCondition + `
+	conditionMatch = `SELECT 1 FROM conditions c WHERE c.patient_id = p.id AND ` + usableCondition + `
 		AND (c.disease_code = ? OR lower(c.name) LIKE ? OR lower(c.label) LIKE ?)`
-	medicationMatch = `SELECT 1 FROM medications m WHERE m.patient_id IN (SELECT q.id FROM patients q WHERE q.person_id = p.person_id)
+	medicationMatch = `SELECT 1 FROM medications m WHERE m.patient_id = p.id
 		AND coalesce(m.status, '') <> 'entered-in-error'
 		AND (m.drug_code = ? OR lower(m.name) LIKE ? OR lower(m.label) LIKE ?)`
-	procedureMatch = `SELECT 1 FROM procedures pr WHERE pr.patient_id IN (SELECT q.id FROM patients q WHERE q.person_id = p.person_id)
+	procedureMatch = `SELECT 1 FROM procedures pr WHERE pr.patient_id = p.id
 		AND coalesce(pr.status, '') NOT IN ('entered-in-error', 'not-done')
 		AND (pr.procedure_code = ? OR lower(pr.name) LIKE ? OR lower(pr.label) LIKE ?)`
 )
@@ -263,10 +263,8 @@ func (s *Server) cell(n int) any {
 	return n
 }
 
-// duplicateGroups finds possible duplicates within a list of person ids: the
-// same normalized name and birth date, or the same SSN with a different name or
-// birth date (a conflict). People confirmed by SSN already share one person id,
-// so they never appear here.
+// duplicateGroups finds possible duplicates within a list of patient ids: the
+// same name (ignoring case, accents and punctuation) and birth date.
 //
 // dupOf lists, for each id, the other ids in the list that may be the same
 // person. extra is how many ids are extra (beyond the first in each group), so
@@ -280,9 +278,8 @@ func (s *Server) duplicateGroups(ids []string) (dupOf map[string][]string, extra
 	for _, id := range ids {
 		in[id] = true
 	}
-	rows, err := s.db.Query(`SELECT DISTINCT a.person_id, b.person_id FROM patients a JOIN patients b
-		ON a.person_id <> b.person_id AND (
-			(a.name_key = b.name_key AND a.birth_date = b.birth_date) OR a.ssn_hash = b.ssn_hash)
+	rows, err := s.db.Query(`SELECT a.id, b.id FROM patients a JOIN patients b
+		ON a.id <> b.id AND a.name_key = b.name_key AND a.birth_date = b.birth_date
 		ORDER BY 1, 2`)
 	if err != nil {
 		return nil, 0, err
@@ -309,13 +306,13 @@ func (s *Server) duplicateGroups(ids []string) (dupOf map[string][]string, extra
 }
 
 func (s *Server) latestLabs(code string) (map[string]latestLab, error) {
-	// Keyed by person: the latest value across all of a person's patient records.
+	// Keyed by patient: each patient's latest value.
 	// observation_values holds single results and components alike, so a part
 	// like systolic blood pressure can be searched by its own lab test code.
-	rows, err := s.db.Query(`SELECT pt.person_id, v.value, coalesce(v.unit, ''), o.measured_at, coalesce(v.name, o.name, o.label, '')
-		FROM observation_values v JOIN observations o ON o.id = v.observation_id JOIN patients pt ON pt.id = o.patient_id
-		WHERE v.lab_test_code = ? AND v.value IS NOT NULL AND `+usableObservation+`
-		ORDER BY pt.person_id, o.measured_at DESC`, code)
+	rows, err := s.db.Query(`SELECT o.patient_id, v.value, coalesce(v.unit, ''), o.measured_at, coalesce(v.name, o.name, o.label, '')
+		FROM observation_values v JOIN observations o ON o.id = v.observation_id
+		WHERE o.patient_id IS NOT NULL AND v.lab_test_code = ? AND v.value IS NOT NULL AND `+usableObservation+`
+		ORDER BY o.patient_id, o.measured_at DESC`, code)
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +333,7 @@ func (s *Server) latestLabs(code string) (map[string]latestLab, error) {
 
 func (s *Server) cohortConditions(patientID string) ([]map[string]any, error) {
 	rows, err := s.db.Query(`SELECT c.disease_code, coalesce(c.name, c.label), c.clinical_status, c.onset_date
-		FROM conditions c WHERE c.patient_id IN (SELECT id FROM patients WHERE person_id = ?) AND c.disease_code IS NOT NULL AND `+usableCondition+` ORDER BY c.onset_date`, patientID)
+		FROM conditions c WHERE c.patient_id = ? AND c.disease_code IS NOT NULL AND `+usableCondition+` ORDER BY c.onset_date`, patientID)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +351,7 @@ func (s *Server) cohortConditions(patientID string) ([]map[string]any, error) {
 
 func (s *Server) cohortMedications(patientID string) ([]map[string]any, error) {
 	rows, err := s.db.Query(`SELECT drug_code, coalesce(name, label), status FROM medications
-		WHERE patient_id IN (SELECT id FROM patients WHERE person_id = ?) AND coalesce(status, '') <> 'entered-in-error' ORDER BY prescribed_at`, patientID)
+		WHERE patient_id = ? AND coalesce(status, '') <> 'entered-in-error' ORDER BY prescribed_at`, patientID)
 	if err != nil {
 		return nil, err
 	}
@@ -377,10 +374,10 @@ func (s *Server) cohortMedications(patientID string) ([]map[string]any, error) {
 // honest: possible duplicate patients (the same person from two clinics) are
 // counted once, and small counts are hidden.
 func (s *Server) conditionCounts(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(`SELECT DISTINCT c.code_system, c.disease_code, coalesce(c.name, c.label), pt.person_id
-		FROM conditions c JOIN patients pt ON pt.id = c.patient_id
-		WHERE c.disease_code IS NOT NULL AND ` + usableCondition + `
-		ORDER BY c.code_system, c.disease_code, pt.person_id`)
+	rows, err := s.db.Query(`SELECT DISTINCT c.code_system, c.disease_code, coalesce(c.name, c.label), c.patient_id
+		FROM conditions c
+		WHERE c.patient_id IS NOT NULL AND c.disease_code IS NOT NULL AND ` + usableCondition + `
+		ORDER BY c.code_system, c.disease_code, c.patient_id`)
 	if err != nil {
 		serverError(w, err)
 		return

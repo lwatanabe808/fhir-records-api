@@ -35,10 +35,7 @@ import (
 type Config struct {
 	MaxBinaryBytes int // decoded Binary data over this size is not stored
 	MaxRecordBytes int // non-Binary lines over this size are not processed
-	// SSNSecret is the key for hashing SSNs, so the database never
-	// holds the number and nobody without the key can rebuild it.
-	SSNSecret []byte
-	Now       func() time.Time
+	Now            func() time.Time
 }
 
 // Summary is what the loader reports when it finishes.
@@ -205,7 +202,7 @@ func (l *Loader) processLine(lineNo int64, line []byte) error {
 	h, supported := handlers[resourceType]
 	if !supported {
 		l.summary.RawOnly++
-		return rec.issue(UnsupportedType, Info, "resourceType", resourceType+" is valid FHIR but not supported yet", "stored raw only, available at /patients/{id}/records")
+		return rec.issue(UnsupportedType, Info, "resourceType", resourceType+" is valid FHIR but not supported yet", "stored raw only")
 	}
 
 	// Same type + id seen before?
@@ -257,16 +254,12 @@ func (l *Loader) exec(query string, args ...any) error {
 }
 
 func (l *Loader) insertRaw(rec *recordCtx, keepJSON bool) error {
-	patientRef := ""
-	if field := fhir.SubjectField(rec.r); field != "" {
-		patientRef = fhir.Str(rec.r, field, "reference")
-	}
 	var rawJSON any
 	if keepJSON {
 		rawJSON = string(rec.raw)
 	}
-	return l.exec(`INSERT INTO raw_resources (id, resource_type, fhir_id, patient_ref, parsed_ok, raw_json)
-		VALUES (?, ?, ?, ?, 1, ?)`, rec.line, rec.resourceType, rec.id, patientRef, rawJSON)
+	return l.exec(`INSERT INTO raw_resources (id, resource_type, fhir_id, parsed_ok, raw_json)
+		VALUES (?, ?, ?, 1, ?)`, rec.line, rec.resourceType, rec.id, rawJSON)
 }
 
 // checkDuplicateID handles a type + id seen earlier in the file:

@@ -90,12 +90,13 @@ func TestScenarioUnsupportedTypes(t *testing.T) {
 	}
 	wantIssue(t, db, "typo-600", NonStandardType)
 	// Unsupported records with a patient link (subject or patient) are still found by patient.
-	wantValue(t, db, `SELECT COUNT(*) FROM raw_resources WHERE patient_id = 'pt-600' AND fhir_id IN ('en-600', 'al-600', 'im-600')`, "3")
+	wantValue(t, db, `SELECT COUNT(*) FROM raw_resources WHERE fhir_id IN ('en-600', 'al-600', 'im-600') AND raw_json IS NOT NULL`, "3")
 }
 
 func TestScenarioPatientLinks(t *testing.T) {
 	db, _ := scenario(t, "07-patient-links.jsonl")
-	wantValue(t, db, `SELECT patient_id FROM observations WHERE id = 'ob-700'`, "abc")
+	wantValue(t, db, `SELECT patient_id FROM observations WHERE id = 'ob-700'`, "NULL") // abc and ABC are the same id twice
+	wantIssue(t, db, "ob-700", UnknownPatient)
 	wantValue(t, db, `SELECT patient_id FROM observations WHERE id = 'ob-701'`, "NULL") // abc or ABC: never guess
 	wantIssue(t, db, "ob-701", UnknownPatient)
 	wantValue(t, db, `SELECT patient_id FROM observations WHERE id = 'ob-702'`, "pt-700")
@@ -116,8 +117,7 @@ func TestScenarioDates(t *testing.T) {
 	// Same moment in different time zones: duplicates.
 	wantIssue(t, db, "ob-805", DuplicateRecord)
 	wantValue(t, db, `SELECT is_primary FROM observations WHERE id = 'ob-805'`, "0")
-	wantIssue(t, db, "ob-806", ImpossibleValue) // after death
-	wantIssue(t, db, "ob-807", InvalidDate)     // February 30
+	wantIssue(t, db, "ob-807", InvalidDate) // February 30
 	wantValue(t, db, `SELECT measured_at FROM observations WHERE id = 'ob-807'`, "NULL")
 	wantValue(t, db, `SELECT measured_at FROM observations WHERE id = 'ob-800'`, "2020")
 }
@@ -194,30 +194,17 @@ func TestScenarioBulk(t *testing.T) {
 
 func TestScenarioIdentifiers(t *testing.T) {
 	db, _ := scenario(t, "13-identifiers.jsonl")
-	// Same SSN, same name (ignoring case and accents) and birth date: one person.
-	wantIssue(t, db, "id-a1", SamePersonBySSN)
-	wantIssue(t, db, "id-a2", SamePersonBySSN)
-	wantValue(t, db, `SELECT person_id FROM patients WHERE id = 'id-a2'`, "id-a1")
-	// Same SSN, different birth date: a conflict, never combined.
-	wantIssue(t, db, "id-c1", SSNConflict)
-	wantValue(t, db, `SELECT person_id FROM patients WHERE id = 'id-c2'`, "id-c2")
-	// Placeholder, partial and fake numbers are never used.
-	for _, id := range []string{"id-e1", "id-e2", "id-f", "id-g"} {
-		wantIssue(t, db, id, InvalidSSN)
-		wantValue(t, db, `SELECT ssn_hash FROM patients WHERE id = '`+id+`'`, "NULL")
+	// SSNs are not used for matching. Same name (ignoring case, accents and
+	// punctuation) and birth date: a possible duplicate.
+	wantIssue(t, db, "id-a1", PossibleDuplicatePatient) // María García / MARIA GARCIA
+	wantIssue(t, db, "id-h1", PossibleDuplicatePatient) // Zoë O'Brien / ZOE O BRIEN
+	// Same name, different birth date: not flagged.
+	if got := issueTypes(t, db, "id-c1"); len(got) != 0 {
+		t.Errorf("id-c1: want no issues, got %v", got)
 	}
-	if got := issueTypes(t, db, "id-e1"); slices.Contains(got, SSNConflict) || slices.Contains(got, SamePersonBySSN) {
-		t.Errorf("a placeholder SSN must not link people: %v", got)
-	}
-	// Names compared ignoring accents and punctuation.
-	wantIssue(t, db, "id-h1", PossibleDuplicatePatient)
-	// A unique valid SSN raises nothing.
-	if got := issueTypes(t, db, "id-u"); len(got) != 0 {
-		t.Errorf("id-u: want no issues, got %v", got)
-	}
-	// The SSN itself is never stored in the clean tables or issue text.
+	// The SSN never appears in the clean tables or in issue text.
 	for _, q := range []string{
-		`SELECT COUNT(*) FROM patients WHERE ssn_hash LIKE '%234567890%' OR full_name LIKE '%2345%'`,
+		`SELECT COUNT(*) FROM patients WHERE full_name LIKE '%2345%'`,
 		`SELECT COUNT(*) FROM issues WHERE detail LIKE '%2345%' OR detail LIKE '%3456%'`,
 	} {
 		wantValue(t, db, q, "0")
@@ -233,25 +220,6 @@ func TestNameKey(t *testing.T) {
 		if got := nameKey(c[0]); got != c[1] {
 			t.Errorf("nameKey(%q) = %q, want %q", c[0], got, c[1])
 		}
-	}
-}
-
-func TestNewestCorrection(t *testing.T) {
-	a := obsRow{id: "a", lastUpdated: "2024-01-01"}
-	b := obsRow{id: "b", lastUpdated: "2024-01-01"}
-	c := obsRow{id: "c", lastUpdated: "2024-02-01"}
-	// An earlier tie must not stop a later, newer record from winning.
-	if got, ok := newest([]obsRow{a, b, c}); got.id != "c" || !ok {
-		t.Errorf("want c, decided; got %s, %v", got.id, ok)
-	}
-	// A tie for newest can't be decided: lowest id, not decided.
-	if got, ok := newest([]obsRow{c, b, a}[1:]); got.id != "a" || ok {
-		t.Errorf("want a, undecided; got %s, %v", got.id, ok)
-	}
-	// issued breaks the tie when lastUpdated can't.
-	a.issued, b.issued = "2024-01-02", "2024-01-03"
-	if got, ok := newest([]obsRow{a, b}); got.id != "b" || !ok {
-		t.Errorf("want b, decided; got %s, %v", got.id, ok)
 	}
 }
 

@@ -131,14 +131,15 @@ write("06-unsupported-types.jsonl", [
     {"resourceType": "Observaton", "id": "typo-600", "subject": {"reference": "Patient/pt-600"}},
 ])
 
-# 07. Patient id trouble: two patients whose ids differ only by capital letters,
-#     links in odd formats, and links to non-patients.
-#     Expect: ambiguous capital-letter links stay unlinked, never guessed.
+# 07. Patient id trouble: two patients whose ids differ only by capital letters
+#     (the same id twice, since FHIR ids ignore case), links in odd formats,
+#     and links to non-patients.
+#     Expect: links to the doubled id stay unlinked, never guessed.
 write("07-patient-links.jsonl", [
     patient("abc", ["Lower"], "Case", "1980-01-01"),
     patient("ABC", ["Upper"], "Case", "1981-01-01"),
     patient("pt-700", ["Solo"], "Patient", "1982-01-01"),
-    obs("ob-700", "abc", A1C, "2025-01-01T08:00:00Z", 6.0, "%"),                      # exact
+    obs("ob-700", "abc", A1C, "2025-01-01T08:00:00Z", 6.0, "%"),                      # abc or ABC: same id twice
     obs("ob-701", "Abc", A1C, "2025-01-02T08:00:00Z", 6.0, "%"),                      # ambiguous: abc or ABC
     obs("ob-702", "PT-700", A1C, "2025-01-03T08:00:00Z", 6.0, "%"),                   # capital letters, one match
     {**obs("ob-703", "x", A1C, "2025-01-04T08:00:00Z", 6.0, "%"), "subject": {"reference": "Group/cohort-1"}},
@@ -147,9 +148,8 @@ write("07-patient-links.jsonl", [
     {**obs("ob-706", "x", A1C, "2025-01-07T08:00:00Z", 6.0, "%"), "subject": None},
 ])
 
-# 08. Dates: partial dates, time zones, date-only duplicates, after death.
-#     Expect: date-only readings on the same day are NOT grouped as duplicates;
-#     the reading after death is impossible.
+# 08. Dates: partial dates, time zones, date-only duplicates.
+#     Expect: date-only readings on the same day are NOT grouped as duplicates.
 write("08-dates.jsonl", [
     patient("pt-800", ["Tim"], "Zone", "1950-05", deceasedDateTime="2024-03-01T00:00:00Z"),
     obs("ob-800", "pt-800", WEIGHT, "2020", 70, "kg"),
@@ -158,7 +158,7 @@ write("08-dates.jsonl", [
     obs("ob-803", "pt-800", GLUCOSE, "2022-01-01", 180, "mg/dL"),                     # same day, no time: not a duplicate
     obs("ob-804", "pt-800", A1C, "2023-05-05T10:00:00-07:00", 6.0, "%"),
     obs("ob-805", "pt-800", A1C, "2023-05-05T17:00:00Z", 6.4, "%"),                   # same moment in UTC: duplicate
-    obs("ob-806", "pt-800", A1C, "2025-01-01T08:00:00Z", 6.2, "%"),                   # after death: impossible
+    obs("ob-806", "pt-800", A1C, "2025-01-01T08:00:00Z", 6.2, "%"),                   # after the patient's death date (not checked)
     obs("ob-807", "pt-800", A1C, "2023-02-30T08:00:00Z", 6.2, "%"),                   # Feb 30: invalid date
 ])
 
@@ -228,11 +228,9 @@ write("11-values.jsonl", [
     obs("ob-1110", "pt-1100", A1C, "2025-01-11T08:00:00Z", 6.0, "%", status="cancelled"),
 ])
 
-# 13. Identifiers: matching people by Social Security number.
-#     Expect: same SSN plus same name and birth date = one person (combined chart);
-#     same SSN but a different birth date = conflict (separate chart, counted once
-#     in research); placeholder and partial SSNs are ignored; names are compared
-#     ignoring case, accents and punctuation.
+# 13. Identifiers: records that carry SSNs, and names written different ways.
+#     Expect: SSNs are never used or returned; the same name (ignoring case,
+#     accents and punctuation) and birth date is flagged as a possible duplicate.
 def ssn_patient(pid, given, family, birth, ssn=None, gender="female"):
     p = patient(pid, given, family, birth, gender=gender)
     if ssn is not None:

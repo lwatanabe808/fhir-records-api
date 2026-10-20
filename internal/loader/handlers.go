@@ -101,21 +101,11 @@ func insertPatient(rec *recordCtx) error {
 		p.Active = nil // wrong type: Go's decoder may have left false here
 	}
 
-	// SSN: only a keyed hash is kept, and only for numbers that could be real.
-	var ssnHash string
-	if digits, found, problem := patientSSN(p.Identifier); found && problem != "" {
-		if err := rec.issue(InvalidSSN, Warning, "identifier", "SSN "+problem, "not used for matching"); err != nil {
-			return err
-		}
-	} else if found {
-		ssnHash = hashSSN(rec.l.cfg.SSNSecret, digits)
-	}
-
 	return rec.l.exec(`INSERT INTO patients (id, raw_resource_id, full_name, family_name, given_names, gender, birth_date,
-			deceased_date, active, name_key, ssn_hash, person_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			deceased_date, active, name_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.id, rec.line, fullName, name.Family, givenNames, gender, birthDate, deceased, p.Active,
-		nameKey(fullName), ssnHash, rec.id)
+		nameKey(fullName))
 }
 
 // ---------- Observation ----------
@@ -150,7 +140,7 @@ func insertObservation(rec *recordCtx) error {
 	var o fhir.Observation
 	rec.decode(&o)
 
-	patientRef, err := rec.patientRef()
+	patientRef, err := rec.patientRef(o.Subject)
 	if err != nil {
 		return err
 	}
@@ -352,7 +342,7 @@ func insertCondition(rec *recordCtx) error {
 	var c fhir.Condition
 	rec.decode(&c)
 
-	patientRef, err := rec.patientRef()
+	patientRef, err := rec.patientRef(c.Subject)
 	if err != nil {
 		return err
 	}
@@ -364,6 +354,7 @@ func insertCondition(rec *recordCtx) error {
 	if err != nil {
 		return err
 	}
+	// take the first status code and check if it's one of the valid statuses.
 	clinical := allowed(c.ClinicalStatus.First().Code, "active", "recurrence", "relapse", "inactive", "remission", "resolved")
 	verification := allowed(c.VerificationStatus.First().Code, "unconfirmed", "provisional", "differential", "confirmed", "refuted", "entered-in-error")
 	return rec.l.exec(`INSERT INTO conditions (id, raw_resource_id, patient_ref, code_system, disease_code, name, label,
@@ -379,7 +370,7 @@ func insertMedication(rec *recordCtx) error {
 	var m fhir.MedicationRequest
 	rec.decode(&m)
 
-	patientRef, err := rec.patientRef()
+	patientRef, err := rec.patientRef(m.Subject)
 	if err != nil {
 		return err
 	}
@@ -418,7 +409,7 @@ func insertProcedure(rec *recordCtx) error {
 	var p fhir.Procedure
 	rec.decode(&p)
 
-	patientRef, err := rec.patientRef()
+	patientRef, err := rec.patientRef(p.Subject)
 	if err != nil {
 		return err
 	}

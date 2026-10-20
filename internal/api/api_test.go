@@ -140,10 +140,10 @@ func TestNotesShowDecodedTextAndReasons(t *testing.T) {
 	}
 }
 
-func TestUnsupportedTypeReachable(t *testing.T) {
+func TestUnsupportedTypeKeptRaw(t *testing.T) {
+	// Immunization has no clean table: it is kept raw, for the data team only.
 	h := newTestServer(t, "../../testdata/messy.jsonl")
-	body := get(t, h, "/patients/p1/records?type=Immunization", http.StatusOK)
-	if !strings.Contains(body, `"imm1"`) {
+	if body := get(t, h, "/fhir/Immunization/imm1", http.StatusOK); !strings.Contains(body, `"imm1"`) {
 		t.Errorf("Immunization not returned: %s", body)
 	}
 }
@@ -356,23 +356,16 @@ func TestDatasetProfileCountsPeopleOnce(t *testing.T) {
 	}
 }
 
-func TestPeopleMatchedBySSN(t *testing.T) {
+func TestPossibleDuplicatesCountedOnce(t *testing.T) {
 	h := newTestServerWithCell(t, "../../testdata/scenarios/13-identifiers.jsonl", 1)
 
-	// id-a1 and id-a2 are the same person: one chart shows both clinics' records.
-	if body := get(t, h, "/patients/id-a1", http.StatusOK); !strings.Contains(body, `"id-a2"`) {
-		t.Errorf("id-a1 should list id-a2 as a linked record: %s", body)
-	}
-	if body := get(t, h, "/patients/id-a1/conditions", http.StatusOK); !strings.Contains(body, "id-a2-co") {
-		t.Errorf("id-a1's chart should include id-a2's diagnosis: %s", body)
-	}
-	// id-c1 and id-c2 conflict: charts stay separate.
-	if body := get(t, h, "/patients/id-c1/observations", http.StatusOK); strings.Contains(body, "id-c2-ob") {
-		t.Errorf("id-c1's chart must not show id-c2's records: %s", body)
+	// Possible duplicates are never combined: each chart shows only its own records.
+	if body := get(t, h, "/patients/id-a1/conditions", http.StatusOK); strings.Contains(body, "id-a2-co") {
+		t.Errorf("id-a1's chart must not show id-a2's records: %s", body)
 	}
 
-	// Research: 11 patient records, 10 people (id-a1 and id-a2 are one).
-	// id-c1/id-c2 (SSN conflict) and id-h1/id-h2 (same name) are possible duplicates.
+	// Research: 11 patients. id-a1/id-a2 and id-h1/id-h2 share a name and birth
+	// date, so each pair counts once without possible duplicates.
 	body := get(t, h, "/research/cohort", http.StatusOK)
 	var resp struct {
 		Without  int `json:"countWithoutDuplicates"`
@@ -380,13 +373,8 @@ func TestPeopleMatchedBySSN(t *testing.T) {
 		Possible int `json:"possibleDuplicatePatients"`
 	}
 	json.Unmarshal([]byte(body), &resp)
-	if resp.Incl != 10 || resp.Possible != 2 || resp.Without != 8 {
-		t.Errorf("want 10 people, 2 possible duplicates, 8 without: %+v", resp)
-	}
-	// The person's latest A1c comes from either clinic (id-a2's 7.3 is newest).
-	body = get(t, h, "/research/cohort?condition=diabetes&lab=a1c", http.StatusOK)
-	if !strings.Contains(body, `"value": 7.3`) {
-		t.Errorf("latest A1c across the person's records should be 7.3: %s", body)
+	if resp.Incl != 11 || resp.Possible != 2 || resp.Without != 9 {
+		t.Errorf("want 11 patients, 2 possible duplicates, 9 without: %+v", resp)
 	}
 }
 
@@ -395,7 +383,6 @@ func TestSSNNeverReturned(t *testing.T) {
 	for _, path := range []string{
 		"/fhir/Patient/id-a1",
 		"/fhir/Patient/id-a1/history",
-		"/patients/id-a1/records",
 		"/patients/id-a1",
 		"/data-quality/issues?includeRaw=true",
 		"/research/cohort",

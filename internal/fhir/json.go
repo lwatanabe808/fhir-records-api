@@ -93,18 +93,6 @@ func ParseRef(ref string) (resourceType, id string, ok bool) {
 	return m[1], m[2], true
 }
 
-// SubjectField is the field that holds the patient link. Most types use
-// "subject", but some (Immunization, AllergyIntolerance...) use "patient".
-func SubjectField(r Obj) string {
-	if _, ok := r["subject"]; ok {
-		return "subject"
-	}
-	if _, ok := r["patient"]; ok {
-		return "patient"
-	}
-	return ""
-}
-
 var datePattern = regexp.MustCompile(`^\d{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?)?$`)
 
 // ParseDate accepts the FHIR date and dateTime formats (year, year-month,

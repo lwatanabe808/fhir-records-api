@@ -63,8 +63,7 @@ func (s *Server) datasetProfile(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	// One id per person: people confirmed by SSN count once.
-	allIDs, err := s.stringList(`SELECT id FROM patients WHERE id = person_id ORDER BY id`)
+	allIDs, err := s.stringList(`SELECT id FROM patients ORDER BY id`)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -91,14 +90,13 @@ func (s *Server) datasetProfile(w http.ResponseWriter, r *http.Request) {
 
 // historyStats measures how long and how full each patient's record is.
 func (s *Server) historyStats() (map[string]any, error) {
-	// Measured per person, so confirmed matches count as one history.
-	rows, err := s.db.Query(`SELECT pt.person_id, x.d FROM (
+	rows, err := s.db.Query(`SELECT x.patient_id, x.d FROM (
 		SELECT patient_id, measured_at AS d FROM observations WHERE patient_id IS NOT NULL AND measured_at IS NOT NULL
 		UNION ALL SELECT patient_id, onset_date FROM conditions WHERE patient_id IS NOT NULL AND onset_date IS NOT NULL
 		UNION ALL SELECT patient_id, prescribed_at FROM medications WHERE patient_id IS NOT NULL AND prescribed_at IS NOT NULL
 		UNION ALL SELECT patient_id, performed_at FROM procedures WHERE patient_id IS NOT NULL AND performed_at IS NOT NULL
 		UNION ALL SELECT patient_id, date FROM document_references WHERE patient_id IS NOT NULL AND date IS NOT NULL
-		) x JOIN patients pt ON pt.id = x.patient_id`)
+		) x`)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +224,7 @@ func (s *Server) codingStandards() (map[string]any, error) {
 
 // population gives age bands and gender, with small groups hidden.
 func (s *Server) population() (map[string]any, error) {
-	rows, err := s.db.Query(`SELECT coalesce(gender, 'unknown'), birth_date FROM patients WHERE id = person_id`)
+	rows, err := s.db.Query(`SELECT coalesce(gender, 'unknown'), birth_date FROM patients`)
 	if err != nil {
 		return nil, err
 	}

@@ -29,7 +29,6 @@ show "Procedures" "/patients/noah-wyle/procedures"
 show "Notes with decoded text" "/patients/noah-wyle/notes"
 show "Search this patient's notes" "/patients/noah-wyle/notes?q=shift"
 show "Timeline, newest first" "/patients/noah-wyle/timeline"
-show "Raw records of any type, including non-standard ones" "/patients/noah-wyle/records"
 
 # Research partners (B2B)
 show "Cohort: diabetes with latest A1c of 7 or more (de-identified)" "/research/cohort?condition=diabetes&lab=a1c&labMin=7"
