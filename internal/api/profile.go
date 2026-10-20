@@ -2,7 +2,6 @@ package api
 
 import (
 	"database/sql"
-	"fmt"
 	"math"
 	"net/http"
 	"sort"
@@ -13,48 +12,13 @@ import (
 
 // GET /research/dataset-profile
 //
-// Answers the first questions a research partner asks about a dataset before
-// buying it: how long is each patient's history, how complete and well coded
-// is it, how clean is it, and who is in it. All numbers are aggregates; any
-// population group smaller than the minimum cell size is shown as "<N" so a
-// tiny group can't single someone out.
+// What a research partner asks before buying data: how many patients, how long
+// and how full each patient's history is, and who is in it. This matches what
+// Novellia sells: long, complete patient histories. All numbers are aggregates;
+// any population group smaller than the minimum cell size is shown as "<N".
 func (s *Server) datasetProfile(w http.ResponseWriter, r *http.Request) {
 	history, err := s.historyStats()
 	if err != nil {
-		serverError(w, err)
-		return
-	}
-	completeness, err := s.percentages(map[string]string{
-		"patientsWithBirthDate":       `SELECT avg(birth_date IS NOT NULL) FROM patients`,
-		"patientsWithGender":          `SELECT avg(gender IS NOT NULL) FROM patients`,
-		"recordsLinkedToPatient":      `SELECT avg(patient_id IS NOT NULL) FROM (SELECT patient_id FROM observations UNION ALL SELECT patient_id FROM conditions UNION ALL SELECT patient_id FROM medications UNION ALL SELECT patient_id FROM procedures UNION ALL SELECT patient_id FROM document_references)`,
-		"observationsWithLabTestCode": `SELECT avg(lab_test_code IS NOT NULL) FROM observations`,
-		"numericResultsWithUnit":      `SELECT avg(unit IS NOT NULL) FROM observation_values WHERE is_component = 0 AND value IS NOT NULL`,
-		"conditionsWithDiseaseCode":   `SELECT avg(disease_code IS NOT NULL) FROM conditions`,
-		"medicationsWithDrugCode":     `SELECT avg(drug_code IS NOT NULL) FROM medications`,
-		"medicationsWithDosage":       `SELECT avg(dosage IS NOT NULL) FROM medications`,
-		"notesWithReadableText":       `SELECT avg(EXISTS (SELECT 1 FROM document_attachments a JOIN binaries b ON b.id = a.binary_id WHERE a.document_id = d.id AND b.text IS NOT NULL)) FROM document_references d`,
-	})
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	coding, err := s.codingStandards()
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	quality, err := s.percentages(map[string]string{
-		"observationsImpossible":          `SELECT avg(is_impossible) FROM observations`,
-		"observationsDuplicateOrReplaced": `SELECT avg(is_primary = 0) FROM observations`,
-		"linesThatFailedToLoad":           `SELECT avg(parsed_ok = 0 OR resource_type IS NULL) FROM raw_resources`,
-	})
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	var possibleDupPatients int
-	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT record_id) FROM issues WHERE issue_type = 'POSSIBLE_DUPLICATE_PATIENT'`).Scan(&possibleDupPatients); err != nil {
 		serverError(w, err)
 		return
 	}
@@ -74,17 +38,14 @@ func (s *Server) datasetProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	quality["patientsPossiblyDuplicated"] = possibleDupPatients
 	writeJSON(w, http.StatusOK, map[string]any{
 		"patientsWithoutDuplicates":           len(allIDs) - extra, // possible duplicates count once
 		"patientsIncludingPossibleDuplicates": len(allIDs),
+		"possibleDuplicatePatients":           extra,
 		"history":                             history,
-		"completenessPercent":                 completeness,
-		"codingStandards":                     coding,
-		"quality":                             quality,
 		"population":                          population,
 		"minCellSize":                         s.minCellSize,
-		"note":                                "Aggregates only. Population groups smaller than minCellSize are shown as \"<N\". Percentages are of all records loaded.",
+		"note":                                "Aggregates only. Population groups smaller than minCellSize are shown as \"<N\".",
 	})
 }
 
@@ -155,73 +116,6 @@ func summary(values []float64) map[string]any {
 	return map[string]any{"median": round(median(values)), "min": round(values[0]), "max": round(values[len(values)-1])}
 }
 
-// percentages runs queries that return a 0 to 1 average and turns them into percents.
-func (s *Server) percentages(queries map[string]string) (map[string]any, error) {
-	out := map[string]any{}
-	for key, q := range queries {
-		var v sql.NullFloat64
-		if err := s.db.QueryRow(q).Scan(&v); err != nil {
-			return nil, fmt.Errorf("%s: %w", key, err)
-		}
-		if v.Valid {
-			out[key] = math.Round(v.Float64*1000) / 10
-		} else {
-			out[key] = nil
-		}
-	}
-	return out, nil
-}
-
-// codingStandards reports which code lists the codes come from. Standard
-// lists (LOINC, SNOMED, RxNorm) can be compared across datasets; local clinic
-// codes can't.
-func (s *Server) codingStandards() (map[string]any, error) {
-	rows, err := s.db.Query(`
-		SELECT 'observations' AS t, code_system FROM observations WHERE lab_test_code IS NOT NULL
-		UNION ALL SELECT 'conditions', code_system FROM conditions WHERE disease_code IS NOT NULL
-		UNION ALL SELECT 'medications', code_system FROM medications WHERE drug_code IS NOT NULL
-		UNION ALL SELECT 'procedures', code_system FROM procedures WHERE procedure_code IS NOT NULL`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	names := map[string]string{
-		"http://loinc.org":                            "LOINC",
-		"http://snomed.info/sct":                      "SNOMED",
-		"http://www.nlm.nih.gov/research/umls/rxnorm": "RxNorm",
-	}
-	counts := map[string]map[string]int{}
-	totals := map[string]int{}
-	for rows.Next() {
-		var table string
-		var system sql.NullString
-		if err := rows.Scan(&table, &system); err != nil {
-			return nil, err
-		}
-		name := names[system.String]
-		switch {
-		case !system.Valid:
-			name = "no code system"
-		case name == "":
-			name = "other"
-		}
-		if counts[table] == nil {
-			counts[table] = map[string]int{}
-		}
-		counts[table][name]++
-		totals[table]++
-	}
-	out := map[string]any{}
-	for table, byName := range counts {
-		pct := map[string]float64{}
-		for name, n := range byName {
-			pct[name] = math.Round(float64(n)/float64(totals[table])*1000) / 10
-		}
-		out[table] = pct
-	}
-	return out, rows.Err()
-}
-
 // population gives age bands and gender, with small groups hidden.
 func (s *Server) population() (map[string]any, error) {
 	rows, err := s.db.Query(`SELECT coalesce(gender, 'unknown'), birth_date FROM patients`)
@@ -264,4 +158,12 @@ func (s *Server) suppress(counts map[string]int) map[string]any {
 		out[k] = s.cell(n)
 	}
 	return out
+}
+
+func median(sorted []float64) float64 {
+	n := len(sorted)
+	if n%2 == 1 {
+		return sorted[n/2]
+	}
+	return (sorted[n/2-1] + sorted[n/2]) / 2
 }

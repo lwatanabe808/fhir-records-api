@@ -61,12 +61,11 @@ func (s *Server) stringList(query string, args ...any) ([]string, error) {
 type recordList struct {
 	query         string
 	args          []any
-	single        bool // GET .../{recordId}: one record
-	includeHidden bool // ?includeHidden=true, or a single record
+	includeHidden bool // ?includeHidden=true
 }
 
-// newRecordList reads what every record list needs: the patient, ?includeHidden,
-// and {recordId}. ok is false when an error response was already written.
+// newRecordList reads what every record list needs: the patient and
+// ?includeHidden. ok is false when an error response was already written.
 func (s *Server) newRecordList(w http.ResponseWriter, r *http.Request, selectFrom string) (list *recordList, ok bool) {
 	id := s.resolvePatient(w, r)
 	if id == "" {
@@ -76,13 +75,7 @@ func (s *Server) newRecordList(w http.ResponseWriter, r *http.Request, selectFro
 	if paramError(w, err) {
 		return nil, false
 	}
-	list = &recordList{query: selectFrom + ` WHERE patient_id = ?`, args: []any{id}, includeHidden: includeHidden}
-	// GET .../{recordId} returns one record, even if it would be hidden.
-	if recordID := r.PathValue("recordId"); recordID != "" {
-		list.single, list.includeHidden = true, true
-		list.where(`id = ?`, recordID)
-	}
-	return list, true
+	return &recordList{query: selectFrom + ` WHERE patient_id = ?`, args: []any{id}, includeHidden: includeHidden}, true
 }
 
 // where adds one filter to the query.
@@ -305,13 +298,12 @@ func (s *Server) patientConditions(w http.ResponseWriter, r *http.Request) {
 			"codeSystem": nullStr(system), "diseaseCode": nullStr(code), "status": nullStr(clinical),
 			"verification": nullStr(verification), "onset": nullStr(onset)})
 	}
-	s.respondWithWarnings(w, items, raws, list.single)
+	s.respondWithWarnings(w, items, raws)
 }
 
-// respondWithWarnings attaches the issue list to each item and writes the
-// response: the whole list, or one record when single is true.
+// respondWithWarnings attaches the issue list to each item and writes the list.
 // raws[i] is the raw line of items[i].
-func (s *Server) respondWithWarnings(w http.ResponseWriter, items []map[string]any, raws []int64, single bool) {
+func (s *Server) respondWithWarnings(w http.ResponseWriter, items []map[string]any, raws []int64) {
 	warns, err := s.warningsFor(raws)
 	if err != nil {
 		serverError(w, err)
@@ -319,14 +311,6 @@ func (s *Server) respondWithWarnings(w http.ResponseWriter, items []map[string]a
 	}
 	for i, it := range items {
 		it["warnings"] = emptyIfNil(warns[raws[i]])
-	}
-	if single {
-		if len(items) == 0 {
-			writeError(w, http.StatusNotFound, "RECORD_NOT_FOUND", "this patient has no such record")
-			return
-		}
-		writeJSON(w, http.StatusOK, items[0])
-		return
 	}
 	if items == nil {
 		items = []map[string]any{}
@@ -373,7 +357,7 @@ func (s *Server) patientMedications(w http.ResponseWriter, r *http.Request) {
 			"codeSystem": nullStr(system), "drugCode": nullStr(code), "status": nullStr(st),
 			"prescribedAt": nullStr(at), "dosage": nullStr(dosage)})
 	}
-	s.respondWithWarnings(w, items, raws, list.single)
+	s.respondWithWarnings(w, items, raws)
 }
 
 func nullIfEmpty(s string) any {
@@ -456,7 +440,7 @@ func (s *Server) patientObservations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.respondWithWarnings(w, items, raws, list.single)
+	s.respondWithWarnings(w, items, raws)
 }
 
 // addValues adds an observation's results to its JSON from observation_values:
@@ -537,7 +521,7 @@ func (s *Server) patientProcedures(w http.ResponseWriter, r *http.Request) {
 			"codeSystem": nullStr(system), "procedureCode": nullStr(code), "status": nullStr(st),
 			"performedAt": nullStr(at), "performer": nullStr(performer)})
 	}
-	s.respondWithWarnings(w, items, raws, list.single)
+	s.respondWithWarnings(w, items, raws)
 }
 
 // ---------- GET /patients/{id}/notes ----------
@@ -546,12 +530,6 @@ func (s *Server) patientNotes(w http.ResponseWriter, r *http.Request) {
 	list, ok := s.newRecordList(w, r, `SELECT id, raw_resource_id, status, note_type, date, author FROM document_references`)
 	if !ok {
 		return
-	}
-	// ?q= searches the text of this patient's notes. One patient has a few hundred
-	// notes at most, so a plain text match is fast enough and easy to get right.
-	if text := strings.TrimSpace(r.URL.Query().Get("q")); text != "" {
-		list.where(`id IN (SELECT a.document_id FROM document_attachments a JOIN binaries b ON b.id = a.binary_id
-			WHERE b.text LIKE ? ESCAPE '\')`, "%"+likeEscape(text)+"%")
 	}
 	if !list.includeHidden {
 		list.where(`coalesce(status, '') <> 'entered-in-error'`)
@@ -585,7 +563,7 @@ func (s *Server) patientNotes(w http.ResponseWriter, r *http.Request) {
 		}
 		it["attachments"] = atts
 	}
-	s.respondWithWarnings(w, items, raws, list.single)
+	s.respondWithWarnings(w, items, raws)
 }
 
 func (s *Server) attachments(documentID string) ([]map[string]any, error) {
@@ -675,9 +653,4 @@ func (s *Server) patientTimeline(w http.ResponseWriter, r *http.Request) {
 		return di > dj
 	})
 	writeJSON(w, http.StatusOK, events)
-}
-
-// likeEscape makes % and _ in user text match literally in a LIKE pattern.
-func likeEscape(s string) string {
-	return strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(s)
 }

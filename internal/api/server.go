@@ -50,24 +50,16 @@ func NewServer(db *sql.DB, summary loader.Summary, opts Options) http.Handler {
 	// Patient app
 	mux.HandleFunc("GET /patients", s.listPatients)
 	mux.HandleFunc("GET /patients/{id}", s.getPatient)
-	mux.HandleFunc("GET /patients/{id}/summary", s.patientSummary)
 	mux.HandleFunc("GET /patients/{id}/conditions", s.patientConditions)
-	mux.HandleFunc("GET /patients/{id}/conditions/{recordId}", s.patientConditions)
 	mux.HandleFunc("GET /patients/{id}/medications", s.patientMedications)
-	mux.HandleFunc("GET /patients/{id}/medications/{recordId}", s.patientMedications)
 	mux.HandleFunc("GET /patients/{id}/observations", s.patientObservations)
-	mux.HandleFunc("GET /patients/{id}/observations/{recordId}", s.patientObservations)
 	mux.HandleFunc("GET /patients/{id}/procedures", s.patientProcedures)
-	mux.HandleFunc("GET /patients/{id}/procedures/{recordId}", s.patientProcedures)
 	mux.HandleFunc("GET /patients/{id}/notes", s.patientNotes)
-	mux.HandleFunc("GET /patients/{id}/notes/{recordId}", s.patientNotes)
 	mux.HandleFunc("GET /patients/{id}/timeline", s.patientTimeline)
 
 	// Research partners (B2B)
 	mux.HandleFunc("GET /research/cohort", s.cohort)
-	mux.HandleFunc("GET /research/conditions", s.conditionCounts)
 	mux.HandleFunc("GET /research/dataset-profile", s.datasetProfile)
-	mux.HandleFunc("GET /research/labs/{code}", s.labSummary)
 
 	// Data quality
 	mux.HandleFunc("GET /data-quality/summary", s.qualitySummary)
@@ -75,7 +67,6 @@ func NewServer(db *sql.DB, summary loader.Summary, opts Options) http.Handler {
 
 	// Original records
 	mux.HandleFunc("GET /fhir/{type}/{id}", s.rawRecord)
-	mux.HandleFunc("GET /fhir/{type}/{id}/history", s.rawRecordHistory)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "no endpoint at "+r.Method+" "+r.URL.Path)

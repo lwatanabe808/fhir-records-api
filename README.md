@@ -70,15 +70,12 @@ make test
 |---|---|
 | `GET /patients?name=&gender=&bornAfter=&bornBefore=&limit=&offset=` | Patients, searchable and paged |
 | `GET /patients/{id}` | One patient. Ids work in any capitalization (FHIR ids are case-insensitive). |
-| `GET /patients/{id}/summary` | One call for the app's home screen: active conditions, current medications, the latest result of each test, recent procedures |
 | `GET /patients/{id}/conditions?status=` | Diagnoses |
 | `GET /patients/{id}/medications?status=` | Prescriptions |
 | `GET /patients/{id}/observations?code=&from=&to=` | Labs and vitals. `code` takes a LOINC code or a shortcut like `a1c`, `oxygen`, `blood-pressure`. Blood pressure comes back split into systolic and diastolic. |
 | `GET /patients/{id}/procedures` | Procedures |
-| `GET /patients/{id}/notes?q=` | Notes with decoded text, or the reason text isn't available. `q` searches this patient's note text. |
+| `GET /patients/{id}/notes` | Notes with decoded text, or the reason text isn't available |
 | `GET /patients/{id}/timeline` | Every record in one list, newest first |
-
-Each list also has a single record endpoint, for example `GET /patients/{id}/observations/{recordId}`. It returns the record even if it would be hidden, and a 404 if the record belongs to another patient.
 
 Every list item has a `warnings` field listing problems found in that record. Records that shouldn't count as real data are hidden by default: entered in error, replaced by a correction, non-primary duplicates, and impossible values. Add `includeHidden=true` to see them, with a `hiddenBecause` reason.
 
@@ -86,9 +83,7 @@ Every list item has a `warnings` field listing problems found in that record. Re
 | Endpoint | What it returns |
 |---|---|
 | `GET /research/cohort?condition=&medication=&procedure=&lab=&labMin=&labMax=&minAge=&maxAge=&gender=` | Count and de-identified details of matching patients. Exclusion criteria: `excludeCondition=`, `excludeMedication=`, `excludeProcedure=`. The count also reports possible duplicate patients. |
-| `GET /research/dataset-profile` | What partners ask before buying data: years of history per patient, completeness, coding standards, quality rates, and age and gender (small groups hidden) |
-| `GET /research/conditions` | How many patients have each condition. Possible duplicate patients are counted once, and counts under `MIN_CELL_SIZE` show as `<5`. |
-| `GET /research/labs/{code}` | Each patient's latest value for one test: count, min, median, max, per unit. A possible duplicate patient contributes one value, and statistics for groups under `MIN_CELL_SIZE` are hidden. |
+| `GET /research/dataset-profile` | What partners ask before buying data: how many patients, how long and full each history is, and age and gender (small groups hidden) |
 
 ### Data quality
 | Endpoint | What it returns |
@@ -100,7 +95,6 @@ Every list item has a `warnings` field listing problems found in that record. Re
 | Endpoint | What it returns |
 |---|---|
 | `GET /fhir/{type}/{id}` | The original record, exactly as received |
-| `GET /fhir/{type}/{id}/history` | Every version of a record in file order, marked current, replaced or identical copy |
 | `GET /health` | Status and the load summary |
 
 Every error uses the same shape: `{"error": {"code": "INVALID_PARAMETER", "message": "limit: must be a whole number from 1 to 500"}}`. Bad parameters return 400, unknown patients and records return 404.
@@ -111,7 +105,7 @@ Every error uses the same shape: `{"error": {"code": "INVALID_PARAMETER", "messa
 
 Partners describe the patients they need as **inclusion and exclusion criteria**, so both are supported: `condition=diabetes&excludeCondition=heart failure&procedure=colonoscopy`.
 
-**Honest counts.** The same person can arrive from two clinics under two patient ids. The loader never merges them, so every research count accounts for it: every research count gives three numbers: `countWithoutDuplicates` (the conservative number, possible duplicates counted once), `countIncludingPossibleDuplicates` (every patient id), and `possibleDuplicatePatients` (how many were combined). Condition counts, lab summaries and the dataset profile use the same names with `patients` in place of `count`. In cohort results, each affected patient lists the research ids it may duplicate, and a lab summary takes one value per person. A count a partner can trust matters more than a big one.
+**Honest counts.** The same person can arrive from two clinics under two patient ids. The loader never merges them, so every research count accounts for it: every research count gives three numbers: `countWithoutDuplicates` (the conservative number, possible duplicates counted once), `countIncludingPossibleDuplicates` (every patient id), and `possibleDuplicatePatients` (how many were combined). The dataset profile uses the same names with `patients` in place of `count`. In cohort results, each affected patient lists the research ids it may duplicate. A count a partner can trust matters more than a big one.
 
 **Why this one:** it's how Novellia earns revenue. Clinical trials often struggle to find enough eligible patients, and Novellia's advantage is complete, cleaned history across many providers. This endpoint turns the cleaned data into that answer.
 
@@ -122,15 +116,12 @@ Partners describe the patients they need as **inclusion and exclusion criteria**
 
 ### Dataset profile
 
-`/research/dataset-profile` answers the questions partners ask to judge whether data is usable, before any cohort search:
+`/research/dataset-profile` answers the questions partners ask to judge whether data is usable, before any cohort search. It matches what Novellia sells: long, complete patient histories.
 
 | Question | Where it's answered |
 |---|---|
 | How long is each patient's history? | `history.yearsOfHistory`: median, min and max across patients |
 | How much data per patient? How current? | `history.datedRecordsPerPatient`, `history.yearsSinceLatestRecord` |
-| How complete are the key fields? | `completenessPercent`: birth date, gender, linked records, codes, units, dosages, readable notes |
-| Is it coded in standard terms? | `codingStandards`: percent LOINC, SNOMED, RxNorm, other, or none, per record type |
-| How clean is it? | `quality`: impossible, duplicate or replaced values, failed lines, possible duplicate patients |
 | Who is in it? | `population`: age bands and gender, with groups under `MIN_CELL_SIZE` shown as `<5` |
 
 It reports medians, not means, because a few extreme patients would pull a mean off.
@@ -163,7 +154,7 @@ raw_resources ─┬─ patients
 
 - Every clean table has `raw_resource_id`, the line it came from.
 - `observations` has `is_primary` and `replaced_by` for duplicates and corrections, and an `is_impossible` flag.
-- `observation_values` holds every result value in one place. A single result like A1c 7.8 % is one row. A multi-part result like blood pressure has one row per part (systolic, diastolic), each with its own lab test code. So any query for a lab test code finds its numbers in one table, wherever FHIR put them. For example, `/research/labs/8480-6` summarizes systolic blood pressure.
+- `observation_values` holds every result value in one place. A single result like A1c 7.8 % is one row. A multi-part result like blood pressure has one row per part (systolic, diastolic), each with its own lab test code. So any query for a lab test code finds its numbers in one table, wherever FHIR put them. For example, `/research/cohort?lab=8480-6&labMin=140` finds patients by systolic blood pressure.
 - `document_attachments` is a link table because a note can have several attachments and several notes can share one Binary. Inline attachments (base64 inside the note) are stored in `binaries` with a generated id like `docref-001-inline-1`.
 - `issues` has a `group_key` that ties together records in the same duplicate or correction group.
 - Indexes match how the data is read: a patient's results for one test, everyone's results for one test (research), codes for cohort filters, and issues by record, type, severity and group. Checked with `EXPLAIN QUERY PLAN`. Name search uses `LIKE '%...%'`, which can't use an index; full-text search (SQLite FTS5) would fix that at scale.
@@ -218,7 +209,7 @@ Each case below is covered by a test in [internal/loader/loader_test.go](interna
 | 36 | Note links to a missing Binary | Pass 2 | Link kept, no text | `BINARY_BROKEN_REFERENCE` | warning |
 | 37 | Binary no note links to | Pass 2 | Kept, on no chart | `ORPHAN_BINARY` | info |
 | 38 | Same type and id, identical | Pass 1 | Copy skipped | `DUPLICATE_ID` | info |
-| 39 | Same type and id, changed | Pass 1 | Later version wins (unless `meta.lastUpdated` says otherwise). Older versions stay in `raw_resources` and are listed by `/fhir/{type}/{id}/history` | `DUPLICATE_ID_CHANGED` | warning |
+| 39 | Same type and id, changed | Pass 1 | Later version wins (unless `meta.lastUpdated` says otherwise). Older versions stay in `raw_resources` | `DUPLICATE_ID_CHANGED` | warning |
 | 40 | Different ids, same patient, test and exact time | Pass 2 | Lowest id is primary, others hidden (same or different values) | `DUPLICATE_RECORD` | warning |
 | 42 | Amended or corrected reading | Pass 2 | Replaces the others in its group (`replaced_by`). Several corrections: the lowest id wins | `SUPERSEDED` | info |
 | 43 | Same name and birth date (ignoring case, accents and punctuation), different patient ids | Pass 2 | Separate charts, counted once in research | `POSSIBLE_DUPLICATE_PATIENT` | warning |
@@ -292,6 +283,7 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 - **Code checks against LOINC and SNOMED** through a terminology server, so a code that doesn't exist gets flagged. Today only the presence of a code and its code system is checked.
 - **Fetch web address attachments** from the source system using the patient's portal connection, and store large files in a private, encrypted S3 bucket, served through short-lived pre-signed URLs.
 - **More record types,** like Immunization and AllergyIntolerance, each with its own checks and clean table, so they can appear on the patient's chart.
+- **Searching a patient's note text,** and **research summaries** like patients per condition or lab value ranges across patients. The cohort search covers the counts partners ask for first.
 - **Matching people by identifiers** like SSN or medical record number, stored only as a keyed hash, to combine a person's records from several clinics into one chart.
 - **Picking the newest of several corrections** by `meta.lastUpdated`, and telling exact copies apart from duplicates with different values.
 - **Dates checked against the patient's life:** a measurement dated before the patient was born or after they died.

@@ -3,6 +3,8 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"math"
 	"net/http"
 	"strings"
 )
@@ -174,61 +176,19 @@ func (s *Server) rawRecord(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(redactRaw(raw)))
 }
 
-// ---------- GET /fhir/{type}/{id}/history ----------
-
-// Every version of a record, in the order it appeared in the file. When the
-// same type and id arrive more than once, the clean tables keep only the
-// current version, so this is where the older versions can be seen.
-func (s *Server) rawRecordHistory(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(`SELECT r.id, r.raw_json,
-			(SELECT i.issue_type FROM issues i WHERE i.raw_resource_id = r.id
-			 AND i.issue_type IN ('DUPLICATE_ID', 'DUPLICATE_ID_CHANGED') LIMIT 1)
-		FROM raw_resources r WHERE r.resource_type = ? AND r.fhir_id = ? AND r.raw_json IS NOT NULL
-		ORDER BY r.id`, r.PathValue("type"), r.PathValue("id"))
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	defer rows.Close()
-	type version struct {
-		line  int64
-		raw   string
-		issue sql.NullString
-	}
-	var versions []version
-	for rows.Next() {
-		var v version
-		if err := rows.Scan(&v.line, &v.raw, &v.issue); err != nil {
-			serverError(w, err)
-			return
+// percentages runs queries that return a 0 to 1 average and turns them into percents.
+func (s *Server) percentages(queries map[string]string) (map[string]any, error) {
+	out := map[string]any{}
+	for key, q := range queries {
+		var v sql.NullFloat64
+		if err := s.db.QueryRow(q).Scan(&v); err != nil {
+			return nil, fmt.Errorf("%s: %w", key, err)
 		}
-		versions = append(versions, v)
-	}
-	if len(versions) == 0 {
-		writeError(w, http.StatusNotFound, "RECORD_NOT_FOUND", "no "+r.PathValue("type")+" with id "+r.PathValue("id"))
-		return
-	}
-
-	// Which version is in the clean table: the one whose line it points to.
-	var currentLine sql.NullInt64
-	table := map[string]string{"Patient": "patients", "Observation": "observations", "Condition": "conditions",
-		"MedicationRequest": "medications", "Procedure": "procedures", "DocumentReference": "document_references", "Binary": "binaries"}[r.PathValue("type")]
-	if table != "" {
-		_ = s.db.QueryRow(`SELECT raw_resource_id FROM `+table+` WHERE id = ?`, r.PathValue("id")).Scan(&currentLine)
-	}
-
-	out := []map[string]any{}
-	for i, v := range versions {
-		item := map[string]any{"version": i + 1, "line": v.line, "resource": json.RawMessage(redactRaw(v.raw))}
-		switch {
-		case currentLine.Valid && v.line == currentLine.Int64:
-			item["status"] = "current"
-		case v.issue.String == "DUPLICATE_ID":
-			item["status"] = "identical copy, skipped"
-		default:
-			item["status"] = "replaced"
+		if v.Valid {
+			out[key] = math.Round(v.Float64*1000) / 10
+		} else {
+			out[key] = nil
 		}
-		out = append(out, item)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"type": r.PathValue("type"), "id": r.PathValue("id"), "versions": out})
+	return out, nil
 }

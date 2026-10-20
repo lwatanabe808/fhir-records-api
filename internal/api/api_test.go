@@ -148,63 +148,6 @@ func TestUnsupportedTypeKeptRaw(t *testing.T) {
 	}
 }
 
-func TestSingleRecord(t *testing.T) {
-	h := newTestServer(t, "../../data/fhir-resources.jsonl")
-	// A hidden record can still be fetched by id, with the reason it's hidden.
-	body := get(t, h, "/patients/tracy-ifeachor/observations/obs-ti-003", http.StatusOK)
-	if !strings.Contains(body, "replaced by obs-ti-005") {
-		t.Errorf("expected the hidden reason, got %s", body)
-	}
-	// A record that belongs to another patient is not found.
-	get(t, h, "/patients/noah-wyle/observations/obs-ti-005", http.StatusNotFound)
-	get(t, h, "/patients/noah-wyle/conditions/nope", http.StatusNotFound)
-	get(t, h, "/patients/noah-wyle/notes/docref-001", http.StatusOK)
-}
-
-func TestSummary(t *testing.T) {
-	h := newTestServer(t, "../../data/fhir-resources.jsonl")
-	body := get(t, h, "/patients/noah-wyle/summary", http.StatusOK)
-	var resp struct {
-		ActiveConditions []map[string]any `json:"activeConditions"`
-		LatestLabs       []map[string]any `json:"latestLabs"`
-	}
-	if err := json.Unmarshal([]byte(body), &resp); err != nil {
-		t.Fatal(err)
-	}
-	if len(resp.ActiveConditions) == 0 {
-		t.Error("expected active conditions")
-	}
-	// Latest A1c is 7.4 (Feb), not the older 7.8 or the hidden 7.9 duplicate.
-	for _, lab := range resp.LatestLabs {
-		if lab["code"] == "4548-4" && lab["value"] != 7.4 {
-			t.Errorf("latest A1c = %v, want 7.4", lab["value"])
-		}
-	}
-}
-
-func TestRecordHistory(t *testing.T) {
-	h := newTestServer(t, "../../testdata/scenarios/09-two-clinics.jsonl")
-	// a-ob-3 appears twice; the first copy has the newer meta.lastUpdated, so it stays current.
-	body := get(t, h, "/fhir/Observation/a-ob-3/history", http.StatusOK)
-	var resp struct {
-		Versions []struct {
-			Version int    `json:"version"`
-			Status  string `json:"status"`
-		} `json:"versions"`
-	}
-	if err := json.Unmarshal([]byte(body), &resp); err != nil {
-		t.Fatal(err)
-	}
-	if len(resp.Versions) != 2 || resp.Versions[0].Status != "current" || resp.Versions[1].Status != "replaced" {
-		t.Errorf("unexpected history: %s", body)
-	}
-	body = get(t, h, "/fhir/Observation/a-ob-2/history", http.StatusOK)
-	if !strings.Contains(body, "identical copy, skipped") {
-		t.Errorf("expected the identical copy to be marked: %s", body)
-	}
-	get(t, h, "/fhir/Observation/nope/history", http.StatusNotFound)
-}
-
 func TestCohortExclusionAndProcedure(t *testing.T) {
 	h := newTestServer(t, "../../data/fhir-resources.jsonl")
 	count := func(path string) int {
@@ -253,31 +196,13 @@ func TestCohortCountsPossibleDuplicates(t *testing.T) {
 	}
 }
 
-func TestNoteSearch(t *testing.T) {
-	h := newTestServer(t, "../../data/fhir-resources.jsonl")
-	if body := get(t, h, "/patients/noah-wyle/notes?q=SHIFT", http.StatusOK); !strings.Contains(body, "docref-001") {
-		t.Errorf("search should be case-insensitive and find docref-001: %s", body)
-	}
-	if body := get(t, h, "/patients/noah-wyle/notes?q=zebra", http.StatusOK); strings.TrimSpace(body) != "[]" {
-		t.Errorf("expected no matches: %s", body)
-	}
-	if body := get(t, h, "/patients/noah-wyle/notes?q=%25", http.StatusOK); strings.TrimSpace(body) != "[]" {
-		t.Errorf("a %% in the search must match literally, not everything: %s", body)
-	}
-	// Another patient's note text is never searched.
-	if body := get(t, h, "/patients/noah-wyle/notes?q=Utahs", http.StatusOK); strings.TrimSpace(body) != "[]" {
-		t.Errorf("found another patient's note: %s", body)
-	}
-}
-
 func TestDatasetProfile(t *testing.T) {
 	h := newTestServer(t, "../../data/fhir-resources.jsonl")
 	body := get(t, h, "/research/dataset-profile", http.StatusOK)
 	var resp struct {
-		Patients     int                       `json:"patientsWithoutDuplicates"`
-		Completeness map[string]float64        `json:"completenessPercent"`
-		Coding       map[string]map[string]any `json:"codingStandards"`
-		Population   map[string]map[string]any `json:"population"`
+		Patients   int                       `json:"patientsWithoutDuplicates"`
+		History    map[string]any            `json:"history"`
+		Population map[string]map[string]any `json:"population"`
 	}
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
 		t.Fatal(err)
@@ -285,11 +210,8 @@ func TestDatasetProfile(t *testing.T) {
 	if resp.Patients != 16 {
 		t.Errorf("patients = %d", resp.Patients)
 	}
-	if resp.Completeness["conditionsWithDiseaseCode"] != 95.7 { // 22 of 23: cond-nw-bad-001 has none
-		t.Errorf("conditionsWithDiseaseCode = %v", resp.Completeness["conditionsWithDiseaseCode"])
-	}
-	if resp.Coding["observations"]["LOINC"] != 100.0 {
-		t.Errorf("observation coding = %v", resp.Coding["observations"])
+	if resp.History["yearsOfHistory"] == nil {
+		t.Errorf("history missing: %s", body)
 	}
 	// 16 patients split into age bands: small bands must be hidden.
 	hidden := false
@@ -307,39 +229,17 @@ func TestDatasetProfile(t *testing.T) {
 }
 
 func TestCountsDoNotDoubleCountDuplicatePatients(t *testing.T) {
-	// Rosa Parks appears as clinic-a-1 and clinic-b-77, both with diabetes and an A1c.
+	// Rosa Parks appears as clinic-a-1 and clinic-b-77, both with diabetes.
 	h := newTestServerWithCell(t, "../../testdata/scenarios/09-two-clinics.jsonl", 1)
-	body := get(t, h, "/research/conditions", http.StatusOK)
-	var conds struct {
-		Conditions []map[string]any `json:"conditions"`
+	body := get(t, h, "/research/cohort?condition=diabetes", http.StatusOK)
+	var resp struct {
+		Without  int `json:"countWithoutDuplicates"`
+		Incl     int `json:"countIncludingPossibleDuplicates"`
+		Possible int `json:"possibleDuplicatePatients"`
 	}
-	if err := json.Unmarshal([]byte(body), &conds); err != nil {
-		t.Fatal(err)
-	}
-	if len(conds.Conditions) != 1 || conds.Conditions[0]["patientsWithoutDuplicates"] != 1.0 ||
-		conds.Conditions[0]["patientsIncludingPossibleDuplicates"] != 2.0 || conds.Conditions[0]["possibleDuplicatePatients"] != 1.0 {
+	json.Unmarshal([]byte(body), &resp)
+	if resp.Without != 1 || resp.Incl != 2 || resp.Possible != 1 {
 		t.Errorf("diabetes should count Rosa once: %s", body)
-	}
-	body = get(t, h, "/research/labs/a1c", http.StatusOK)
-	var labs struct {
-		Patients any `json:"patientsWithoutDuplicates"`
-		Dups     int `json:"possibleDuplicatePatients"`
-	}
-	json.Unmarshal([]byte(body), &labs)
-	if labs.Patients != 1.0 || labs.Dups != 1 {
-		t.Errorf("A1c summary should count Rosa once: %s", body)
-	}
-}
-
-func TestCountsHideSmallGroups(t *testing.T) {
-	h := newTestServer(t, "../../testdata/scenarios/09-two-clinics.jsonl") // minimum group size 5
-	body := get(t, h, "/research/conditions", http.StatusOK)
-	if !strings.Contains(body, `"patientsWithoutDuplicates": "<5"`) {
-		t.Errorf("a condition with 1 patient should show <5: %s", body)
-	}
-	body = get(t, h, "/research/labs/a1c", http.StatusOK)
-	if strings.Contains(body, `"median"`) {
-		t.Errorf("statistics for fewer than 5 patients should be hidden: %s", body)
 	}
 }
 
@@ -382,7 +282,6 @@ func TestSSNNeverReturned(t *testing.T) {
 	h := newTestServerWithCell(t, "../../testdata/scenarios/13-identifiers.jsonl", 1)
 	for _, path := range []string{
 		"/fhir/Patient/id-a1",
-		"/fhir/Patient/id-a1/history",
 		"/patients/id-a1",
 		"/data-quality/issues?includeRaw=true",
 		"/research/cohort",
@@ -404,8 +303,8 @@ func TestComponentSearchableByOwnCode(t *testing.T) {
 	// Systolic blood pressure is stored as a component, but observation_values
 	// lets research find it by its own lab test code.
 	h := newTestServerWithCell(t, "../../data/fhir-resources.jsonl", 1)
-	body := get(t, h, "/research/labs/8480-6", http.StatusOK)
-	if !strings.Contains(body, `"mmHg"`) || !strings.Contains(body, `"patientsWithoutDuplicates": 16`) {
-		t.Errorf("systolic should be found for all 16 patients: %s", body)
+	body := get(t, h, "/research/cohort?lab=8480-6", http.StatusOK)
+	if !strings.Contains(body, `"mmHg"`) {
+		t.Errorf("systolic should be found by its own lab test code: %s", body)
 	}
 }
