@@ -44,7 +44,6 @@ func (s *Server) datasetProfile(w http.ResponseWriter, r *http.Request) {
 		"possibleDuplicatePatients":           extra,
 		"history":                             history,
 		"population":                          population,
-		"minCellSize":                         s.minCellSize,
 	})
 }
 
