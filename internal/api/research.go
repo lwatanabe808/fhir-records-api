@@ -66,6 +66,7 @@ type latestLab struct {
 }
 
 func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
+	// get all parameters
 	q := r.URL.Query()
 	limit, err := intParam(r, "limit", 50, 1, 500)
 	if paramError(w, err) {
@@ -106,31 +107,36 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Patients matching the inclusion and exclusion criteria. Each criterion
-	// matches a code exactly, or a name containing the text.
+	// build where clause with arguments
 	where, args := []string{"1=1"}, []any{}
 	if gender != "" {
 		where = append(where, "p.gender = ?")
 		args = append(args, gender)
 	}
-	add := func(value, matcher string, include bool) {
-		if value == "" {
-			return
-		}
-		op := "EXISTS"
-		if !include {
-			op = "NOT EXISTS"
-		}
-		where = append(where, op+" ("+matcher+")")
-		like := "%" + strings.ToLower(value) + "%"
-		args = append(args, value, like, like)
+	filters := []struct {
+		value, matcher string
+		include        bool
+	}{
+		{condition, conditionMatch, true},
+		{medication, medicationMatch, true},
+		{procedure, procedureMatch, true},
+		{excludeCondition, conditionMatch, false},
+		{excludeMedication, medicationMatch, false},
+		{excludeProcedure, procedureMatch, false},
 	}
-	add(condition, conditionMatch, true)
-	add(medication, medicationMatch, true)
-	add(procedure, procedureMatch, true)
-	add(excludeCondition, conditionMatch, false)
-	add(excludeMedication, medicationMatch, false)
-	add(excludeProcedure, procedureMatch, false)
+	for _, f := range filters {
+		if f.value == "" {
+			continue // filter not given
+		}
+		if f.include {
+			where = append(where, "EXISTS ("+f.matcher+")")
+		} else {
+			where = append(where, "NOT EXISTS ("+f.matcher+")")
+		}
+		like := "%" + strings.ToLower(f.value) + "%"
+		// each query searches for code / name / label => value / like / like
+		args = append(args, f.value, like, like)
+	}
 	rows, err := s.db.Query(`SELECT p.id, p.gender, p.birth_date FROM patients p WHERE `+strings.Join(where, " AND ")+` ORDER BY p.id`, args...)
 	if err != nil {
 		serverError(w, err)

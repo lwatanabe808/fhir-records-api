@@ -47,7 +47,7 @@ func (s *Server) datasetProfile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// historyStats measures how long and how full each patient's record is.
+// Union All stacks all thre results based on common columns
 func (s *Server) historyStats() (map[string]any, error) {
 	rows, err := s.db.Query(`SELECT x.patient_id, x.d FROM (
 		SELECT patient_id, measured_at AS d FROM observations WHERE patient_id IS NOT NULL AND measured_at IS NOT NULL
@@ -146,10 +146,6 @@ func (s *Server) population() (map[string]any, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	bands := []struct {
-		name     string
-		min, max int
-	}{{"0-17", 0, 17}, {"18-34", 18, 34}, {"35-49", 35, 49}, {"50-64", 50, 64}, {"65-79", 65, 79}, {"80+", 80, 200}}
 	ages := map[string]int{}
 	genders := map[string]int{}
 	for rows.Next() {
@@ -164,6 +160,11 @@ func (s *Server) population() (map[string]any, error) {
 			ages["unknown"]++
 			continue
 		}
+		// store person in age band
+		bands := []struct {
+			name     string
+			min, max int
+		}{{"0-17", 0, 17}, {"18-34", 18, 34}, {"35-49", 35, 49}, {"50-64", 50, 64}, {"65-79", 65, 79}, {"80+", 80, 200}}
 		for _, b := range bands {
 			if age >= b.min && age <= b.max {
 				ages[b.name]++
