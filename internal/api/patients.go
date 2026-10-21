@@ -125,29 +125,27 @@ func (s *Server) getPatient(w http.ResponseWriter, r *http.Request) {
 	if id == "" {
 		return
 	}
-	p := patient{ID: id, RecordCounts: map[string]int{}}
+	// The patient and how many records of each kind they have, in one query.
+	p := patient{ID: id}
+	var conditions, medications, observations, procedures, notes int
 	err := s.db.QueryRow(`
-SELECT full_name, family_name, given_names, gender, birth_date, active
-FROM patients
-WHERE id = ?`, id).Scan(&p.Name, &p.FamilyName, &p.GivenNames, &p.Gender, &p.BirthDate, &p.Active)
+SELECT p.full_name, p.family_name, p.given_names, p.gender, p.birth_date, p.active,
+    (SELECT COUNT(*) FROM conditions WHERE patient_id = p.id),
+    (SELECT COUNT(*) FROM medications WHERE patient_id = p.id),
+    (SELECT COUNT(*) FROM observations WHERE patient_id = p.id),
+    (SELECT COUNT(*) FROM procedures WHERE patient_id = p.id),
+    (SELECT COUNT(*) FROM document_references WHERE patient_id = p.id)
+FROM patients p
+WHERE p.id = ?`, id).Scan(&p.Name, &p.FamilyName, &p.GivenNames, &p.Gender, &p.BirthDate, &p.Active,
+		&conditions, &medications, &observations, &procedures, &notes)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 	p.Age = s.age(p.BirthDate)
-
-	// How many records of each kind this patient has.
-	for key, table := range map[string]string{"conditions": "conditions", "medications": "medications",
-		"observations": "observations", "procedures": "procedures", "notes": "document_references"} {
-		var n int
-		if err := s.db.QueryRow(`
-SELECT COUNT(*)
-FROM `+table+`
-WHERE patient_id = ?`, id).Scan(&n); err != nil {
-			serverError(w, err)
-			return
-		}
-		p.RecordCounts[key] = n
+	p.RecordCounts = map[string]int{
+		"conditions": conditions, "medications": medications, "observations": observations,
+		"procedures": procedures, "notes": notes,
 	}
 
 	writeJSON(w, http.StatusOK, p)

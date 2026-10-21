@@ -3,7 +3,6 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"math"
 	"net/http"
 	"strings"
@@ -15,20 +14,24 @@ import (
 // ---------- GET /data-quality/summary ----------
 
 func (s *Server) qualitySummary(w http.ResponseWriter, r *http.Request) {
-	tables := map[string]string{
-		"patients": "patients", "observations": "observations", "conditions": "conditions",
-		"medications": "medications", "procedures": "procedures", "notes": "document_references", "binaries": "binaries",
+	// determine number of records by type, all in one query
+	var patients, observations, conditions, medications, procedures, notes, binaries int
+	err := s.db.QueryRow(`
+SELECT
+    (SELECT COUNT(*) FROM patients),
+    (SELECT COUNT(*) FROM observations),
+    (SELECT COUNT(*) FROM conditions),
+    (SELECT COUNT(*) FROM medications),
+    (SELECT COUNT(*) FROM procedures),
+    (SELECT COUNT(*) FROM document_references),
+    (SELECT COUNT(*) FROM binaries)`).Scan(&patients, &observations, &conditions, &medications, &procedures, &notes, &binaries)
+	if err != nil {
+		serverError(w, err)
+		return
 	}
-	clean := map[string]int{}
-	for key, table := range tables {
-		var n int
-		if err := s.db.QueryRow(`
-SELECT COUNT(*)
-FROM ` + table).Scan(&n); err != nil {
-			serverError(w, err)
-			return
-		}
-		clean[key] = n
+	recordsByType := map[string]int{
+		"patients": patients, "observations": observations, "conditions": conditions,
+		"medications": medications, "procedures": procedures, "notes": notes, "binaries": binaries,
 	}
 
 	bySeverity := map[string]int{}
@@ -56,40 +59,38 @@ ORDER BY 3 DESC, 1`)
 
 	// Completeness: how often key fields are filled in. This is what research
 	// partners ask about first ("how complete is your data?").
-	completeness, err := s.percentages(map[string]string{
-		"patientsWithBirthDate": `
-SELECT avg(birth_date IS NOT NULL)
-FROM patients`,
-		"patientsWithGender": `
-SELECT avg(gender IS NOT NULL)
-FROM patients`,
-		"observationsLinkedToPatient": `
-SELECT avg(patient_id IS NOT NULL)
-FROM observations`,
-		"observationsWithCode": `
-SELECT avg(lab_test_code IS NOT NULL)
-FROM observations`,
-		"conditionsWithCode": `
-SELECT avg(disease_code IS NOT NULL)
-FROM conditions`,
-		"notesWithText": `
-SELECT avg(EXISTS (
-    SELECT 1
-    FROM document_attachments a
-    JOIN binaries b ON b.id = a.binary_id
-    WHERE a.document_id = d.id
-    AND b.text IS NOT NULL
-))
-FROM document_references d`,
-	})
+	// All in one query. avg() of a true/false check is the share that is true.
+	var birthDate, gender, linked, labCode, diseaseCode, noteText sql.NullFloat64
+	err = s.db.QueryRow(`
+SELECT
+    (SELECT avg(birth_date IS NOT NULL) FROM patients),
+    (SELECT avg(gender IS NOT NULL) FROM patients),
+    (SELECT avg(patient_id IS NOT NULL) FROM observations),
+    (SELECT avg(lab_test_code IS NOT NULL) FROM observations),
+    (SELECT avg(disease_code IS NOT NULL) FROM conditions),
+    (SELECT avg(EXISTS (
+        SELECT 1
+        FROM document_attachments a
+        JOIN binaries b ON b.id = a.binary_id
+        WHERE a.document_id = d.id
+        AND b.text IS NOT NULL
+    )) FROM document_references d)`).Scan(&birthDate, &gender, &linked, &labCode, &diseaseCode, &noteText)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
+	completeness := map[string]any{
+		"patientsWithBirthDate":       percent(birthDate),
+		"patientsWithGender":          percent(gender),
+		"observationsLinkedToPatient": percent(linked),
+		"observationsWithCode":        percent(labCode),
+		"conditionsWithCode":          percent(diseaseCode),
+		"notesWithText":               percent(noteText),
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"load":                s.summary,
-		"cleanRecords":        clean,
+		"recordsByType":       recordsByType,
 		"issuesBySeverity":    bySeverity,
 		"issuesByType":        byType,
 		"completenessPercent": completeness,
@@ -212,19 +213,10 @@ LIMIT 1`, r.PathValue("type"), r.PathValue("id")).Scan(&raw)
 	_, _ = w.Write([]byte(redactRaw(raw)))
 }
 
-// percentages runs queries that return a 0 to 1 average and turns them into percents.
-func (s *Server) percentages(queries map[string]string) (map[string]any, error) {
-	out := map[string]any{}
-	for key, q := range queries {
-		var v sql.NullFloat64
-		if err := s.db.QueryRow(q).Scan(&v); err != nil {
-			return nil, fmt.Errorf("%s: %w", key, err)
-		}
-		if v.Valid {
-			out[key] = math.Round(v.Float64*1000) / 10
-		} else {
-			out[key] = nil
-		}
+// percent turns a share like 0.957 into 95.7, or null when the table is empty.
+func percent(share sql.NullFloat64) any {
+	if !share.Valid {
+		return nil
 	}
-	return out, nil
+	return math.Round(share.Float64*1000) / 10
 }
