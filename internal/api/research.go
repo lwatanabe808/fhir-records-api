@@ -230,15 +230,13 @@ ORDER BY p.id`, args...)
 		}
 
 		// set possible duplicates
-		var possibleDuplicates []string
+		possibleDuplicates := []string{} // [] when there are none, so every patient has the field
 		for _, id := range groups[c.nameBirthdayKey] {
 			if id != c.id {
 				possibleDuplicates = append(possibleDuplicates, s.researchID(id))
 			}
 		}
-		if len(possibleDuplicates) > 0 {
-			p["possibleDuplicateOf"] = possibleDuplicates
-		}
+		p["possibleDuplicateOf"] = possibleDuplicates
 		page = append(page, p)
 	}
 

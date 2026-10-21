@@ -31,6 +31,7 @@ sqlite3 -header -column db/novellia.db "SELECT * FROM issues"
 make demo              # calls every endpoint with cURL
 curl -s localhost:8080/patients/noah-wyle/observations?code=4548-4
 ```
+Or click through every endpoint in Postman: import [postman/novellia-fhir-api.postman_collection.json](postman/novellia-fhir-api.postman_collection.json). Each request lists its optional filters under Params, ready to tick on.
 
 **Use your own data file:**
 ```bash
@@ -119,7 +120,7 @@ Every error uses the same shape: `{"error": {"code": "INVALID_PARAMETER", "messa
 
 Partners describe the patients they need as **inclusion and exclusion criteria**, so both are supported: `condition=diabetes&excludeCondition=heart failure&procedure=colonoscopy`.
 
-**Honest counts.** The same person can arrive from two clinics under two patient ids. The loader never merges them, so every research count gives three numbers: `countWithoutDuplicates` (the conservative number, possible duplicates counted once), `countIncludingPossibleDuplicates` (every patient id), and `possibleDuplicatePatients` (how many were combined). The dataset profile uses the same names with `patients` in place of `count`. In cohort results, each affected patient lists the research ids it may duplicate. A count a partner can trust matters more than a big one.
+**Honest counts.** The same person can arrive from two clinics under two patient ids. The loader never merges them, so every research count gives three numbers: `countWithoutDuplicates` (the conservative number, possible duplicates counted once), `countIncludingPossibleDuplicates` (every patient id), and `possibleDuplicatePatients` (how many were combined). The dataset profile uses the same names with `patients` in place of `count`. In cohort results, each patient has `possibleDuplicateOf`: the research ids it may duplicate, or `[]` when there are none. A count a partner can trust matters more than a big one.
 
 **Why this one:** it's how Novellia earns revenue. Clinical trials often struggle to find enough eligible patients, and Novellia's advantage is complete, cleaned history across many providers. This endpoint turns the cleaned data into that answer.
 
@@ -138,7 +139,7 @@ Partners describe the patients they need as **inclusion and exclusion criteria**
 | How much data per patient? How current? | `history.recordsPerPatient`, `history.yearsSinceLatestRecord` |
 | Who is in it? | `population`: age bands and gender, with groups under `MIN_CELL_SIZE` shown as `<5` |
 
-It reports medians, not means, because a few extreme patients would pull a mean off.
+It reports medians, not means, because a few extreme patients would pull a mean off. History counts use the same rules as the cohort search, so duplicate and replaced results, mistakes and ruled-out diagnoses don't inflate them.
 
 ## How loading works
 
@@ -306,7 +307,6 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 - **Code and label checks** using medical synonym data or an LLM that flags suspicious pairs for a person to review.
 - **Small-count suppression in cohort results** too (the dataset profile already hides small groups), so a very small cohort can't single out a person.
 - **FHIR Bundles** unpacked when a line contains one, and contained resources (`#id` attachments).
-- **A Postman collection** alongside the cURL script.
 
 ## Project layout
 
@@ -320,6 +320,7 @@ internal/api/        HTTP endpoints (patients, research, data quality)
 data/                the sample data file
 testdata/            messy.jsonl with planted problems, and the script that builds it
 scripts/demo.sh      cURL calls for every endpoint
+postman/             Postman collection for every endpoint
 ```
 
 ## Tools and libraries

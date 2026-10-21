@@ -1,0 +1,716 @@
+{
+  "info": {
+    "name": "Novellia FHIR API",
+    "description": "Every endpoint of the Novellia FHIR API. Start the API first (make docker or make run). Change baseUrl or patientId under the collection's Variables.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "patientId",
+      "value": "noah-wyle"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "description": "Status and the load summary.",
+      "item": [
+        {
+          "name": "Health and load summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "Patient app",
+      "description": "One patient viewing their own records. Clean data only.",
+      "item": [
+        {
+          "name": "One patient",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/{{patientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients",
+                "{{patientId}}"
+              ]
+            },
+            "description": "Ids work in any capitalization. Includes counts of each record type."
+          }
+        },
+        {
+          "name": "Conditions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/{{patientId}}/conditions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients",
+                "{{patientId}}",
+                "conditions"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "active",
+                  "description": "active, recurrence, relapse, inactive, remission, resolved",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Diagnoses."
+          }
+        },
+        {
+          "name": "Medications",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/{{patientId}}/medications",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients",
+                "{{patientId}}",
+                "medications"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "active",
+                  "description": "active, on-hold, cancelled, completed, stopped, draft, unknown",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Prescriptions. med-nw-003 is linked despite Patient/Noah-Wyle."
+          }
+        },
+        {
+          "name": "Observations: A1c",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/{{patientId}}/observations?code=4548-4",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients",
+                "{{patientId}}",
+                "observations"
+              ],
+              "query": [
+                {
+                  "key": "code",
+                  "value": "4548-4"
+                },
+                {
+                  "key": "from",
+                  "value": "2024-01-01",
+                  "description": "earliest date",
+                  "disabled": true
+                },
+                {
+                  "key": "to",
+                  "value": "2025-12-31",
+                  "description": "latest date",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Only one of the two conflicting duplicates is shown."
+          }
+        },
+        {
+          "name": "Observations: blood pressure",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/{{patientId}}/observations?code=85354-9",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients",
+                "{{patientId}}",
+                "observations"
+              ],
+              "query": [
+                {
+                  "key": "code",
+                  "value": "85354-9"
+                }
+              ]
+            },
+            "description": "Split into systolic and diastolic."
+          }
+        },
+        {
+          "name": "Observations: corrected oxygen",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/tracy-ifeachor/observations?code=59408-5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients",
+                "tracy-ifeachor",
+                "observations"
+              ],
+              "query": [
+                {
+                  "key": "code",
+                  "value": "59408-5"
+                }
+              ]
+            },
+            "description": "Only the amended 96% is shown; it replaced the original 94%."
+          }
+        },
+        {
+          "name": "Procedures",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/{{patientId}}/procedures",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients",
+                "{{patientId}}",
+                "procedures"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Notes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/{{patientId}}/notes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients",
+                "{{patientId}}",
+                "notes"
+              ]
+            },
+            "description": "Notes with their attachments and decoded text."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Research (B2B)",
+      "description": "De-identified data for life science companies.",
+      "item": [
+        {
+          "name": "Cohort: diabetes, latest A1c 7 or more",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/research/cohort?condition=diabetes&lab=4548-4&labMin=7",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "research",
+                "cohort"
+              ],
+              "query": [
+                {
+                  "key": "condition",
+                  "value": "diabetes"
+                },
+                {
+                  "key": "lab",
+                  "value": "4548-4"
+                },
+                {
+                  "key": "labMin",
+                  "value": "7"
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Cohort: women aged 30 to 45",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/research/cohort?gender=female&minAge=30&maxAge=45",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "research",
+                "cohort"
+              ],
+              "query": [
+                {
+                  "key": "gender",
+                  "value": "female"
+                },
+                {
+                  "key": "minAge",
+                  "value": "30"
+                },
+                {
+                  "key": "maxAge",
+                  "value": "45"
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Cohort: diabetes but not high cholesterol",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/research/cohort?condition=diabetes&excludeCondition=hypercholesterolemia",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "research",
+                "cohort"
+              ],
+              "query": [
+                {
+                  "key": "condition",
+                  "value": "diabetes"
+                },
+                {
+                  "key": "excludeCondition",
+                  "value": "hypercholesterolemia"
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Cohort: by procedure",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/research/cohort?procedure=colonoscopy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "research",
+                "cohort"
+              ],
+              "query": [
+                {
+                  "key": "procedure",
+                  "value": "colonoscopy"
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Cohort: every filter (turn on what you need)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/research/cohort",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "research",
+                "cohort"
+              ],
+              "query": [
+                {
+                  "key": "condition",
+                  "value": "diabetes",
+                  "description": "disease code, or text in the name or label",
+                  "disabled": true
+                },
+                {
+                  "key": "medication",
+                  "value": "metformin",
+                  "description": "drug code, or text in the name or label",
+                  "disabled": true
+                },
+                {
+                  "key": "procedure",
+                  "value": "colonoscopy",
+                  "description": "procedure code, or text in the name or label",
+                  "disabled": true
+                },
+                {
+                  "key": "excludeCondition",
+                  "value": "hypercholesterolemia",
+                  "description": "leave out patients with this condition",
+                  "disabled": true
+                },
+                {
+                  "key": "excludeMedication",
+                  "value": "insulin",
+                  "description": "leave out patients with this medication",
+                  "disabled": true
+                },
+                {
+                  "key": "excludeProcedure",
+                  "value": "colonoscopy",
+                  "description": "leave out patients with this procedure",
+                  "disabled": true
+                },
+                {
+                  "key": "lab",
+                  "value": "4548-4",
+                  "description": "lab test code; labMin and labMax apply to the latest result",
+                  "disabled": true
+                },
+                {
+                  "key": "labMin",
+                  "value": "7",
+                  "description": "lowest latest result",
+                  "disabled": true
+                },
+                {
+                  "key": "labMax",
+                  "value": "10",
+                  "description": "highest latest result",
+                  "disabled": true
+                },
+                {
+                  "key": "minAge",
+                  "value": "30",
+                  "description": "0 to 150",
+                  "disabled": true
+                },
+                {
+                  "key": "maxAge",
+                  "value": "65",
+                  "description": "0 to 150",
+                  "disabled": true
+                },
+                {
+                  "key": "gender",
+                  "value": "female",
+                  "description": "male, female, other, unknown",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "patients per page",
+                  "disabled": true
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "where the page starts",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Every filter is listed under Params. Tick the ones you want."
+          }
+        },
+        {
+          "name": "Dataset profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/research/dataset-profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "research",
+                "dataset-profile"
+              ]
+            },
+            "description": "Patients, history depth and population. Groups under MIN_CELL_SIZE show as <5."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Internal (staff only)",
+      "description": "Names, data quality and original records. Staff only.",
+      "item": [
+        {
+          "name": "List patients by name",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/patients?name=wyle",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal",
+                "patients"
+              ],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "wyle"
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "1 to 500",
+                  "disabled": true
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "where the page starts",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "To look someone up."
+          }
+        },
+        {
+          "name": "Data quality summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/data-quality/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal",
+                "data-quality",
+                "summary"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "All issues",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/data-quality/issues",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal",
+                "data-quality",
+                "issues"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "UNKNOWN_PATIENT",
+                  "description": "issue type",
+                  "disabled": true
+                },
+                {
+                  "key": "severity",
+                  "value": "warning",
+                  "description": "error, warning, info",
+                  "disabled": true
+                },
+                {
+                  "key": "recordType",
+                  "value": "Observation",
+                  "description": "FHIR record type",
+                  "disabled": true
+                },
+                {
+                  "key": "recordId",
+                  "value": "obs-nw-002",
+                  "description": "one record's issues",
+                  "disabled": true
+                },
+                {
+                  "key": "groupKey",
+                  "value": "",
+                  "description": "every record in one duplicate or correction group",
+                  "disabled": true
+                },
+                {
+                  "key": "includeRaw",
+                  "value": "true",
+                  "description": "add each record's original JSON",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "100",
+                  "description": "1 to 1000",
+                  "disabled": true
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "where the page starts",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Every problem found while loading."
+          }
+        },
+        {
+          "name": "Issues: patient link problems, with raw records",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/data-quality/issues?type=UNKNOWN_PATIENT&includeRaw=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal",
+                "data-quality",
+                "issues"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "UNKNOWN_PATIENT"
+                },
+                {
+                  "key": "includeRaw",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Original record",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/fhir/Observation/obs-nw-dup-001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal",
+                "fhir",
+                "Observation",
+                "obs-nw-dup-001"
+              ]
+            },
+            "description": "Exactly as received, with SSNs masked."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Errors",
+      "description": "Every error has the same shape.",
+      "item": [
+        {
+          "name": "Bad parameter (400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/patients?limit=abc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal",
+                "patients"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "abc"
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Unknown patient (404)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/nobody",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients",
+                "nobody"
+              ]
+            },
+            "description": ""
+          }
+        }
+      ]
+    }
+  ]
+}

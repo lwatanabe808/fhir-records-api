@@ -56,26 +56,34 @@ FROM (
     FROM observations
     WHERE patient_id IS NOT NULL
     AND measured_at IS NOT NULL
+    AND is_primary = 1
+    AND replaced_by IS NULL
+    AND is_impossible = 0
+    AND coalesce(status, '') IN ('final', 'amended', 'corrected')
     UNION ALL
     SELECT patient_id, onset_date
     FROM conditions
     WHERE patient_id IS NOT NULL
     AND onset_date IS NOT NULL
+    AND coalesce(verification_status, '') NOT IN ('refuted', 'entered-in-error')
     UNION ALL
     SELECT patient_id, prescribed_at
     FROM medications
     WHERE patient_id IS NOT NULL
     AND prescribed_at IS NOT NULL
+    AND coalesce(status, '') <> 'entered-in-error'
     UNION ALL
     SELECT patient_id, performed_at
     FROM procedures
     WHERE patient_id IS NOT NULL
     AND performed_at IS NOT NULL
+    AND coalesce(status, '') NOT IN ('entered-in-error', 'not-done')
     UNION ALL
     SELECT patient_id, date
     FROM document_references
     WHERE patient_id IS NOT NULL
     AND date IS NOT NULL
+    AND coalesce(status, '') <> 'entered-in-error'
 ) x`)
 	if err != nil {
 		return nil, err
@@ -126,15 +134,22 @@ FROM (
 	}, nil
 }
 
-// recordsPerPatient counts every record linked to each patient, dated or not.
+// recordsPerPatient counts each patient's records, dated or not. It uses the same
+// rules as the cohort search, so duplicates, replaced results and mistakes don't count.
 func (s *Server) recordsPerPatient() ([]float64, error) {
 	rows, err := s.db.Query(`
 SELECT
-    (SELECT COUNT(*) FROM observations WHERE patient_id = p.id) +
-    (SELECT COUNT(*) FROM conditions WHERE patient_id = p.id) +
-    (SELECT COUNT(*) FROM medications WHERE patient_id = p.id) +
-    (SELECT COUNT(*) FROM procedures WHERE patient_id = p.id) +
-    (SELECT COUNT(*) FROM document_references WHERE patient_id = p.id)
+    (SELECT COUNT(*) FROM observations WHERE patient_id = p.id
+        AND is_primary = 1 AND replaced_by IS NULL AND is_impossible = 0
+        AND coalesce(status, '') IN ('final', 'amended', 'corrected')) +
+    (SELECT COUNT(*) FROM conditions WHERE patient_id = p.id
+        AND coalesce(verification_status, '') NOT IN ('refuted', 'entered-in-error')) +
+    (SELECT COUNT(*) FROM medications WHERE patient_id = p.id
+        AND coalesce(status, '') <> 'entered-in-error') +
+    (SELECT COUNT(*) FROM procedures WHERE patient_id = p.id
+        AND coalesce(status, '') NOT IN ('entered-in-error', 'not-done')) +
+    (SELECT COUNT(*) FROM document_references WHERE patient_id = p.id
+        AND coalesce(status, '') <> 'entered-in-error')
 FROM patients p`)
 	if err != nil {
 		return nil, err
