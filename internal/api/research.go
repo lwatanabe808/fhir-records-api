@@ -200,16 +200,18 @@ ORDER BY p.id`, args...)
 
 	// 5. De-identified details for this page.
 	// One query for the conditions and one for the medications of every patient on the page.
-	var pageIDs []any
+	var paginatedPatientIDs []any
 	for i := offset; i < len(matched) && i < offset+limit; i++ {
-		pageIDs = append(pageIDs, matched[i].id)
+		paginatedPatientIDs = append(paginatedPatientIDs, matched[i].id)
 	}
-	conds, err := s.cohortConditions(pageIDs)
+	// conditions keyed by patient id. batched query
+	conds, err := s.cohortConditions(paginatedPatientIDs)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	meds, err := s.cohortMedications(pageIDs)
+	// medications keyed by patient id. batched query
+	meds, err := s.cohortMedications(paginatedPatientIDs)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -217,20 +219,25 @@ ORDER BY p.id`, args...)
 	page := []map[string]any{}
 	for i := offset; i < len(matched) && i < offset+limit; i++ {
 		c := matched[i]
+		// convert patient_id to research id using hash
+		// HIPAA requires tha we deindentify the elderly ages since high age is rare and could be identifyable.
 		p := map[string]any{"researchId": s.researchID(c.id), "age": deidentifiedAge(c.birth.String, now),
 			"gender": nullStr(c.gender), "conditions": orEmpty(conds[c.id]), "medications": orEmpty(meds[c.id])}
+		// add lateset lab
 		if labCode != "" {
 			l := labs[c.id]
 			p["lab"] = map[string]any{"test": l.name, "code": labCode, "value": l.value, "unit": l.unit, "year": yearOnly(l.date)}
 		}
-		var others []string
+
+		// set possible duplicates
+		var possibleDuplicates []string
 		for _, id := range groups[c.nameBirthdayKey] {
 			if id != c.id {
-				others = append(others, s.researchID(id))
+				possibleDuplicates = append(possibleDuplicates, s.researchID(id))
 			}
 		}
-		if len(others) > 0 {
-			p["possibleDuplicateOf"] = others
+		if len(possibleDuplicates) > 0 {
+			p["possibleDuplicateOf"] = possibleDuplicates
 		}
 		page = append(page, p)
 	}
