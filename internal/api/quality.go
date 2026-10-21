@@ -11,7 +11,7 @@ import (
 // Endpoints for Novellia's data team: what was wrong in the data, and what
 // the loader did about it. Problems are visible here instead of only in logs.
 
-// ---------- GET /data-quality/summary ----------
+// ---------- GET /internal/data-quality/summary ----------
 
 func (s *Server) qualitySummary(w http.ResponseWriter, r *http.Request) {
 	// determine number of records by type, all in one query
@@ -34,6 +34,8 @@ SELECT
 		"medications": medications, "procedures": procedures, "notes": notes, "binaries": binaries,
 	}
 
+	// determine issues grouped by issue
+	// determine issues grouped by severity
 	bySeverity := map[string]int{}
 	byType := []map[string]any{}
 	rows, err := s.db.Query(`
@@ -57,10 +59,12 @@ ORDER BY 3 DESC, 1`)
 		byType = append(byType, map[string]any{"type": t, "severity": sev, "count": n})
 	}
 
-	// Completeness: how often key fields are filled in. This is what research
-	// partners ask about first ("how complete is your data?").
 	// All in one query. avg() of a true/false check is the share that is true.
-	var birthDate, gender, linked, labCode, diseaseCode, noteText sql.NullFloat64
+	var birthDate, gender, linked, labCode, diseaseCode, noteContent sql.NullFloat64
+	// Determine how complete the data is
+	// QueryRow returns only 1 row
+	// IS NOT NULL resolves to either 0 or 1. So we can take the average
+	// The notes checks whether it has text or linked binary
 	err = s.db.QueryRow(`
 SELECT
     (SELECT avg(birth_date IS NOT NULL) FROM patients),
@@ -73,8 +77,8 @@ SELECT
         FROM document_attachments a
         JOIN binaries b ON b.id = a.binary_id
         WHERE a.document_id = d.id
-        AND b.text IS NOT NULL
-    )) FROM document_references d)`).Scan(&birthDate, &gender, &linked, &labCode, &diseaseCode, &noteText)
+        AND (b.text IS NOT NULL OR b.data IS NOT NULL)
+    )) FROM document_references d)`).Scan(&birthDate, &gender, &linked, &labCode, &diseaseCode, &noteContent)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -85,7 +89,7 @@ SELECT
 		"observationsLinkedToPatient": percent(linked),
 		"observationsWithCode":        percent(labCode),
 		"conditionsWithCode":          percent(diseaseCode),
-		"notesWithText":               percent(noteText),
+		"notesWithContent":            percent(noteContent),
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -97,7 +101,7 @@ SELECT
 	})
 }
 
-// ---------- GET /data-quality/issues ----------
+// ---------- GET /internal/data-quality/issues ----------
 
 func (s *Server) listIssues(w http.ResponseWriter, r *http.Request) {
 	limit, err := intParam(r, "limit", 100, 1, 1000)
@@ -187,7 +191,7 @@ LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "limit": limit, "offset": offset, "issues": list})
 }
 
-// ---------- GET /fhir/{type}/{id} ----------
+// ---------- GET /internal/fhir/{type}/{id} ----------
 
 // The original record exactly as it arrived. If the same id appeared more
 // than once, the last copy is returned.

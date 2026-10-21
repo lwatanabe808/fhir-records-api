@@ -15,7 +15,7 @@ show() {
 show "Health and load summary" "/health"
 
 # Patient app
-show "List patients (search by name, filter by gender or birth date)" "/patients?name=wyle"
+show "List patients, staff only (search by name)" "/internal/patients?name=wyle"
 show "One patient (ids work in any capitalization)" "/patients/NOAH-WYLE"
 show "Conditions" "/patients/noah-wyle/conditions"
 show "Medications (note med-nw-003 was linked despite Patient/Noah-Wyle)" "/patients/noah-wyle/medications"
@@ -32,14 +32,14 @@ show "Cohort with exclusion: diabetes, but not high cholesterol" "/research/coho
 show "Cohort by procedure" "/research/cohort?procedure=colonoscopy"
 show "Dataset profile: patients, history depth, population" "/research/dataset-profile"
 
-# Data quality
-show "Data quality summary" "/data-quality/summary"
-show "All issues" "/data-quality/issues"
-show "Only problems with patient links" "/data-quality/issues?type=UNKNOWN_PATIENT&includeRaw=true"
+# Internal, staff only: data quality
+show "Data quality summary" "/internal/data-quality/summary"
+show "All issues" "/internal/data-quality/issues"
+show "Only problems with patient links" "/internal/data-quality/issues?type=UNKNOWN_PATIENT&includeRaw=true"
 
 # Original FHIR record
-show "Original record, untouched" "/fhir/Observation/obs-nw-dup-001"
+show "Original record, untouched" "/internal/fhir/Observation/obs-nw-dup-001"
 
 # Errors all share one shape
-show "Bad parameter (400)" "/patients?limit=abc"
+show "Bad parameter (400)" "/internal/patients?limit=abc"
 show "Unknown patient (404)" "/patients/nobody"

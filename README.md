@@ -53,7 +53,7 @@ make test
 | `MAX_BINARY_MB` | `5` | Decoded attachments over this size are not stored |
 | `MAX_RECORD_MB` | `10` | Non-Binary lines over this size are not processed |
 | `PATIENT_ID_SECRET` | dev default | Key for the de-identified research ids. Set it in any real environment. |
-| `MIN_CELL_SIZE` | `5` | Research counts below this show as `<5` (condition counts, lab summaries, dataset profile). The sample has only 16 patients, so most groups are hidden; use `MIN_CELL_SIZE=1` to see every number in a demo. |
+| `MIN_CELL_SIZE` | `5` | Dataset profile groups below this show as `<5`. The sample has only 16 patients, so most groups are hidden; use `MIN_CELL_SIZE=1` to see every number in a demo. |
 
 ## Who uses this API
 
@@ -61,14 +61,13 @@ make test
 |---|---|---|
 | **Patients**, through the Novellia app | See their own records in one place, in plain terms, without duplicates or mistakes | `/patients/...` |
 | **Research partners** (life science companies) | Find groups of patients matching criteria, with no identifying details | `/research/...` |
-| **Novellia's data team** | See what was wrong with incoming data and what the loader did about it | `/data-quality/...` |
+| **Novellia staff** (data team, support) | Look up patients, see what was wrong with incoming data and what the loader did about it, and read original records | `/internal/...` |
 
 ## Endpoints
 
 ### Patient app
 | Endpoint | What it returns |
 |---|---|
-| `GET /patients?name=&gender=&bornAfter=&bornBefore=&limit=&offset=` | Patients, searchable and paged |
 | `GET /patients/{id}` | One patient. Ids work in any capitalization (FHIR ids are case-insensitive). |
 | `GET /patients/{id}/conditions?status=` | Diagnoses |
 | `GET /patients/{id}/medications?status=` | Prescriptions |
@@ -76,7 +75,7 @@ make test
 | `GET /patients/{id}/procedures` | Procedures |
 | `GET /patients/{id}/notes` | Notes with decoded text, or the reason text isn't available |
 
-The patient endpoints return clean data only. Records that shouldn't count as real data are never shown: entered in error, replaced by a correction, extra duplicates, and impossible values. They stay in the database. Every problem found while loading, and what was done about it, is listed in `/data-quality/issues` (filter by `recordId` to see one record's problems).
+The patient endpoints return clean data only. Records that shouldn't count as real data are never shown: entered in error, replaced by a correction, extra duplicates, and impossible values. They stay in the database. Every problem found while loading, and what was done about it, is listed in `/internal/data-quality/issues` (filter by `recordId` to see one record's problems).
 
 **Status values** (from FHIR R4's official value sets):
 
@@ -96,16 +95,20 @@ Records marked `entered-in-error`, and cancelled observations, are never returne
 | `GET /research/cohort?condition=&medication=&procedure=&lab=&labMin=&labMax=&minAge=&maxAge=&gender=` | Count and de-identified details of matching patients. Exclusion criteria: `excludeCondition=`, `excludeMedication=`, `excludeProcedure=`. The count also reports possible duplicate patients. |
 | `GET /research/dataset-profile` | What partners ask before buying data: how many patients, how long and full each history is, and age and gender (small groups hidden) |
 
-### Data quality
+### Internal (Novellia staff only)
+
+These return names, birth dates and original records, so they are kept under one prefix that only staff can reach.
+
 | Endpoint | What it returns |
 |---|---|
-| `GET /data-quality/summary` | Load totals, issue counts by type and severity, and how complete key fields are |
-| `GET /data-quality/issues?type=&severity=&recordType=&recordId=&groupKey=&includeRaw=` | Every issue, with the line it came from and what was done |
+| `GET /internal/patients?name=&limit=&offset=` | Patients, searchable by name and paged, so support can look someone up |
+| `GET /internal/data-quality/summary` | Load totals, records by type, issue counts by type and severity, and how complete key fields are |
+| `GET /internal/data-quality/issues?type=&severity=&recordType=&recordId=&groupKey=&includeRaw=` | Every issue, with the line it came from and what was done |
+| `GET /internal/fhir/{type}/{id}` | The original record, exactly as received |
 
 ### Other
 | Endpoint | What it returns |
 |---|---|
-| `GET /fhir/{type}/{id}` | The original record, exactly as received |
 | `GET /health` | Status and the load summary |
 
 Every error uses the same shape: `{"error": {"code": "INVALID_PARAMETER", "message": "limit: must be a whole number from 1 to 500"}}`. Bad parameters return 400, unknown patients and records return 404.
@@ -116,7 +119,7 @@ Every error uses the same shape: `{"error": {"code": "INVALID_PARAMETER", "messa
 
 Partners describe the patients they need as **inclusion and exclusion criteria**, so both are supported: `condition=diabetes&excludeCondition=heart failure&procedure=colonoscopy`.
 
-**Honest counts.** The same person can arrive from two clinics under two patient ids. The loader never merges them, so every research count accounts for it: every research count gives three numbers: `countWithoutDuplicates` (the conservative number, possible duplicates counted once), `countIncludingPossibleDuplicates` (every patient id), and `possibleDuplicatePatients` (how many were combined). The dataset profile uses the same names with `patients` in place of `count`. In cohort results, each affected patient lists the research ids it may duplicate. A count a partner can trust matters more than a big one.
+**Honest counts.** The same person can arrive from two clinics under two patient ids. The loader never merges them, so every research count gives three numbers: `countWithoutDuplicates` (the conservative number, possible duplicates counted once), `countIncludingPossibleDuplicates` (every patient id), and `possibleDuplicatePatients` (how many were combined). The dataset profile uses the same names with `patients` in place of `count`. In cohort results, each affected patient lists the research ids it may duplicate. A count a partner can trust matters more than a big one.
 
 **Why this one:** it's how Novellia earns revenue. Clinical trials often struggle to find enough eligible patients, and Novellia's advantage is complete, cleaned history across many providers. This endpoint turns the cleaned data into that answer.
 
@@ -149,7 +152,7 @@ Principles:
 - **Keep everything.** Every line is stored as received in `raw_resources`, and every clean row points back to it with `raw_resource_id`.
 - **Clean tables only hold valid values.** An invalid value is stored as null in the clean table, the original is kept in `raw_resources`, and an issue explains the difference.
 - **Strict about linking, relaxed about loading.** A record is loaded even if its patient link is broken, but it is never attached to a patient by guessing.
-- **A type is supported only if it has rules.** Other valid FHIR types are stored raw for the data team (`/fhir/{type}/{id}`), but never shown in the patient app, because they were never checked.
+- **A type is supported only if it has rules.** Other valid FHIR types are stored raw for the data team (`/internal/fhir/{type}/{id}`), but never shown in the patient app, because they were never checked.
 
 ## Data model
 
@@ -202,36 +205,36 @@ Each case below is covered by a test in [internal/loader/loader_test.go](interna
 | 19 | Number with no unit | Own check | Unit null | `MISSING_UNIT` | warning |
 | 20 | Empty list (e.g. dosage) | Own check (the schema allows it) | Stored as null | `EMPTY_LIST` | warning |
 | 21 | Impossible value: negative, over 100%, dated in the future | Own check | Hidden from the patient app, excluded from research | `IMPOSSIBLE_VALUE` | error |
-| 23 | Unexpected error in my code on one record | Recover | Keep going | `PROCESSING_ERROR` | error |
+| 22 | Unexpected error in my code on one record | Recover | Keep going | `PROCESSING_ERROR` | error |
 | **Binaries and attachments** |||||
-| 24 | Inline attachment (`data` in the note) | Own check | Normal case: stored in `binaries` with a generated id | none | |
-| 25 | Not valid base64 | Own check (the schema allows any string) | Data and text null | `INVALID_BINARY` | warning |
-| 26 | Over `MAX_BINARY_MB` | Own check | Data not stored | `FILE_TOO_LARGE` | warning |
-| 27 | Missing content type | Own check (the schema allows it) | `application/octet-stream` | `MISSING_BINARY_CONTENT_TYPE` | warning |
-| 28 | Badly formatted content type (`"pdf"`) | Own check | `application/octet-stream` | `INVALID_CONTENT_TYPE` | warning |
-| 29 | Label disagrees with the actual bytes | Own check (byte inspection) | Store the detected type, text null if not text | `CONTENT_TYPE_CONFLICT` | warning |
-| 30 | Note and Binary disagree on the type | Pass 2 | Trust the Binary | `CONTENT_TYPE_MISMATCH` | warning |
-| 31 | Attachment with no url and no data | Own check | No link | `MISSING_BINARY` | warning |
-| 32 | Attachment url in an invalid format | Own check | No link | `INVALID_ATTACHMENT_URL` | warning |
-| 33 | Attachment is a web address | Own check | Not fetched | `UNRESOLVABLE_ATTACHMENT` | info |
+| 23 | Inline attachment (`data` in the note) | Own check | Normal case: stored in `binaries` with a generated id | none | |
+| 24 | Not valid base64 | Own check (the schema allows any string) | Data and text null | `INVALID_BINARY` | warning |
+| 25 | Over `MAX_BINARY_MB` | Own check | Data not stored | `FILE_TOO_LARGE` | warning |
+| 26 | Missing content type | Own check (the schema allows it) | `application/octet-stream` | `MISSING_BINARY_CONTENT_TYPE` | warning |
+| 27 | Badly formatted content type (`"pdf"`) | Own check | `application/octet-stream` | `INVALID_CONTENT_TYPE` | warning |
+| 28 | Label disagrees with the actual bytes | Own check (byte inspection) | Store the detected type, text null if not text | `CONTENT_TYPE_CONFLICT` | warning |
+| 29 | Note and Binary disagree on the type | Pass 2 | Trust the Binary | `CONTENT_TYPE_MISMATCH` | warning |
+| 30 | Attachment with no url and no data | Own check | No link | `MISSING_BINARY` | warning |
+| 31 | Attachment url in an invalid format | Own check | No link | `INVALID_ATTACHMENT_URL` | warning |
+| 32 | Attachment is a web address | Own check | Not fetched | `UNRESOLVABLE_ATTACHMENT` | info |
 | **Step 4: After all lines are loaded** |||||
-| 34 | Capital letter mismatch (`Patient/Noah-Wyle`) | Pass 2 | Linked only if exactly one patient matches | `CASE_MISMATCH_REFERENCE` | warning |
-| 35 | Patient not in the file (`Patient/nwyle`) | Pass 2 | Left unlinked | `UNKNOWN_PATIENT` | warning |
-| 36 | Note links to a missing Binary | Pass 2 | Link kept, no text | `BINARY_BROKEN_REFERENCE` | warning |
-| 37 | Binary no note links to | Pass 2 | Kept, on no chart | `ORPHAN_BINARY` | info |
-| 38 | Same type and id, identical | Pass 1 | Copy skipped | `DUPLICATE_ID` | info |
-| 39 | Same type and id, changed | Pass 1 | Later version wins (unless `meta.lastUpdated` says otherwise). Older versions stay in `raw_resources` | `DUPLICATE_ID_CHANGED` | warning |
-| 40 | Different ids, same patient, test and exact time | Pass 2 | Lowest id is primary, others hidden (same or different values) | `DUPLICATE_RECORD` | warning |
-| 42 | Amended or corrected reading | Pass 2 | Replaces the others in its group (`replaced_by`). Several corrections: the lowest id wins | `SUPERSEDED` | info |
-| 43 | Same name and birth date (ignoring case, accents and punctuation), different patient ids | Pass 2 | Separate charts, counted once in research | `POSSIBLE_DUPLICATE_PATIENT` | warning |
+| 33 | Capital letter mismatch (`Patient/Noah-Wyle`) | Pass 2 | Linked only if exactly one patient matches | `CASE_MISMATCH_REFERENCE` | warning |
+| 34 | Patient not in the file (`Patient/nwyle`) | Pass 2 | Left unlinked | `UNKNOWN_PATIENT` | warning |
+| 35 | Note links to a missing Binary | Pass 2 | Link kept, no text | `BINARY_BROKEN_REFERENCE` | warning |
+| 36 | Binary no note links to | Pass 2 | Kept, on no chart | `ORPHAN_BINARY` | info |
+| 37 | Same type and id, identical | Pass 1 | Copy skipped | `DUPLICATE_ID` | info |
+| 38 | Same type and id, changed | Pass 1 | Later version wins (unless `meta.lastUpdated` says otherwise). Older versions stay in `raw_resources` | `DUPLICATE_ID_CHANGED` | warning |
+| 39 | Different ids, same patient, test and exact time | Pass 2 | Lowest id is primary, others hidden (same or different values) | `DUPLICATE_RECORD` | warning |
+| 40 | Amended or corrected reading | Pass 2 | Replaces the others in its group (`replaced_by`). Several corrections: the lowest id wins | `SUPERSEDED` | info |
+| 41 | Same name and birth date (ignoring case, accents and punctuation), different patient ids | Pass 2 | Separate charts, counted once in research | `POSSIBLE_DUPLICATE_PATIENT` | warning |
 
 **Valid records with special handling (no issue logged):**
 
 | # | Case | How it's known | Handling |
 |---|---|---|---|
-| 44 | Entered in error | `status: "entered-in-error"` | Hidden from the patient app, excluded from research |
-| 45 | Refuted diagnosis | `verificationStatus: "refuted"` | Excluded from research |
-| 46 | Code and label name different things (e.g. `proc-ti-001`: bypass code, "Cardiac Catheterization" label) | A decision, not a check | Both stored and returned, searches use the code |
+| 42 | Entered in error | `status: "entered-in-error"` | Hidden from the patient app, excluded from research |
+| 43 | Refuted diagnosis | `verificationStatus: "refuted"` | Excluded from research |
+| 44 | Code and label name different things (e.g. `proc-ti-001`: bypass code, "Cardiac Catheterization" label) | A decision, not a check | Both stored and returned, searches use the code |
 
 **What the sample file triggers:** `med-nw-003` (capital letters, linked), `obs-nw-006` (unknown patient), `obs-kl-bad-001` (name only), `cond-nw-bad-001` (no disease code), `obs-nw-002` / `obs-nw-dup-001` (A1c 7.8 vs 7.9 at the same time), `obs-ti-003` (replaced by the amended `obs-ti-005`), `med-fd-002` (empty dosage list), `note-robby-001` (`ClinicalNote` is not FHIR).
 
@@ -252,20 +255,20 @@ Besides the sample file, [testdata/scenarios](testdata/scenarios) has input file
 | `09-two-clinics` | Same person from two clinics, repeated and corrected records, `meta.lastUpdated` | Patients never merged, newest version kept |
 | `10-attachments` | PDF, HTML, inline data, a Binary shared by two notes, an image labeled as text | Each stored with the right type and text |
 | `11-values` | Other units, zero, negative, huge, wrong types, a missing value with a reason | Impossible hidden, every missing value logged |
-| `13-identifiers` | Records with SSNs, accented and punctuated names | Same name and birth date flagged, SSNs never returned |
 | `12-bulk` | 22,000 records (built by `make scenarios`, not kept in git) | Loads in about 3 seconds |
+| `13-identifiers` | Records with SSNs, accented and punctuated names | Same name and birth date flagged, SSNs never returned |
 
 ## Key decisions and tradeoffs
 
 - **Go, standard library router, SQLite.** Go 1.22+ routing handles path patterns without a framework. SQLite needs no server, and the pure Go driver means the Docker image needs no C compiler.
 - **Rebuild the database on every start.** The data file is the source of truth, so the same file always gives the same result. The tradeoff: any manual fixes would be lost on restart.
-- **Records decoded as maps, not typed structs.** A typed struct fails the whole record when one field has the wrong type. With maps, each field is read on its own, so the valid parts are kept.
+- **Records decoded into structs, after the schema check.** Each record type has a struct with only the fields we use, so the code reads `p.BirthDate` instead of digging through maps. A field with the wrong type would decode as a zero value (like `0` or `false`), so any field the schema check flagged is treated as missing instead.
 - **The official FHIR schema, plus my own checks.** The schema catches format problems in one step, including ones I didn't think of. But it can't see links between records, and it allows several things FHIR says are wrong (empty lists, any string as base64, a missing Binary content type, a plain string as a patient link), so those are my own checks.
 - **Never guess a patient.** Linking by name, or attaching `Patient/nwyle` to Noah, risks putting health data on the wrong person. An unlinked record is visible and fixable; a wrong link is invisible.
 - **Capital letters are the one exception,** because the FHIR spec says ids are case-insensitive. Even then it only links when exactly one patient matches.
 - **The same person from two clinics.** Patients with the same name (ignoring case, accents and punctuation) and birth date are flagged as possible duplicates. They are never combined on the patient chart, because a wrong merge shows one person's health data to another. In research they count once, so a person is never counted twice. Every count shows `countWithoutDuplicates`, `countIncludingPossibleDuplicates` and `possibleDuplicatePatients`.
 - **SSNs are never used or returned.** The original record is kept as received, so every endpoint that returns raw JSON replaces any SSN with `[redacted]`.
-- **Duplicates are flagged, never deleted.** The patient app shows one primary record; the others stay in the database, and `/data-quality/issues` lists the whole group.
+- **Duplicates are flagged, never deleted.** The patient app shows one primary record; the others stay in the database, and `/internal/data-quality/issues` lists the whole group.
 - **Medical meaning is not judged.** The API checks structure and consistency. Whether a label like "History of MI" fits an active status, or whether a code and its label describe the same thing, needs clinical judgment.
 - **Logs skip query strings,** because they can contain health details.
 
@@ -273,8 +276,8 @@ Besides the sample file, [testdata/scenarios](testdata/scenarios) has input file
 
 - **Login:** OAuth 2.0 / OpenID Connect. Each request carries a signed token saying who the caller is and their role.
 - **Patients** can only reach their own records: the token's patient id must match `{id}`. Mismatches return 404, not 403, so the API doesn't confirm that a record exists.
-- **Research partners** use separate credentials scoped to `/research/...` only. They never see `/patients/...` or raw records.
-- **Data team** access to `/data-quality/...` and raw records, with every access logged, as HIPAA expects.
+- **Research partners** use separate credentials scoped to `/research/...` only. They never see `/patients/...` or `/internal/...`.
+- **Novellia staff** reach `/internal/...`, with every access logged, as HIPAA expects. Grouping staff endpoints under one prefix makes this one rule.
 - **Later:** caregiver access (a parent for a child), stored as explicit grants.
 
 ## A decision I'm not fully satisfied with
@@ -285,11 +288,10 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 
 ## With more time
 
-- **Note search across all patients** for research. Notes are free text full of names, dates and places, so the text itself would need de-identifying first, which is a hard problem on its own. At that scale it would also need a full-text index (SQLite FTS5), and meaning-based search (so "felt sick" matches "nausea") would need an NLP or embedding model. Today, search is per patient, where a plain text match is fast and correct.
+- **Note search across all patients** for research. Notes are free text full of names, dates and places, so the text itself would need de-identifying first, which is a hard problem on its own. At that scale it would also need a full-text index (SQLite FTS5), and meaning-based search (so "felt sick" matches "nausea") would need an NLP or embedding model.
 - **Medication journeys:** each drug's start, stop, switch and dose changes in order, with the reason from the notes. That is what insurance claims miss and what partners ask about. The sample data has one prescription per drug, so it needs richer test data first.
 - **Loading new records as they arrive** instead of rebuilding the database on every start, to keep each patient's record current.
 - **Source system per record.** The data doesn't say which clinic each record came from, which matters when a patient's care spans several systems.
-
 - **Exact decimals.** Lab values are stored as floating point numbers, which is fine for filtering and display but drops FHIR's decimal precision (`7.80` vs `7.8`). The original text is kept in `raw_resources`; a clean column for it would be next.
 - **Code checks against LOINC and SNOMED** through a terminology server, so a code that doesn't exist gets flagged. Today only the presence of a code and its code system is checked.
 - **Fetch web address attachments** from the source system using the patient's portal connection, and store large files in a private, encrypted S3 bucket, served through short-lived pre-signed URLs.
@@ -302,7 +304,7 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 - **Cross-checks between values,** like a blood pressure whose systolic (top) number isn't higher than its diastolic (bottom) number.
 - **Implausible values** (possible, but likely a typo, like an A1c of 78%): ranges per lab test, reviewed by a clinician, or learned from the data with percentiles rather than means, which outliers distort.
 - **Code and label checks** using medical synonym data or an LLM that flags suspicious pairs for a person to review.
-- **Small-count suppression in cohort results** too (condition counts, lab summaries and the dataset profile already hide small groups), so a very small cohort can't single out a person.
+- **Small-count suppression in cohort results** too (the dataset profile already hides small groups), so a very small cohort can't single out a person.
 - **FHIR Bundles** unpacked when a line contains one, and contained resources (`#id` attachments).
 - **A Postman collection** alongside the cURL script.
 
@@ -319,6 +321,15 @@ data/                the sample data file
 testdata/            messy.jsonl with planted problems, and the script that builds it
 scripts/demo.sh      cURL calls for every endpoint
 ```
+
+## Tools and libraries
+
+- **Go,** because it's what I know best. I know Novellia works mainly in Node.js; the design would carry over directly.
+- **net/http** from Go's standard library for routing. Go 1.22+ handles path patterns like `/patients/{id}`, so no framework is needed.
+- **[modernc.org/sqlite](https://gitlab.com/cznic/sqlite):** SQLite written in pure Go, so the Docker image needs no C compiler.
+- **[santhosh-tekuri/jsonschema](https://github.com/santhosh-tekuri/jsonschema):** checks each record against the official FHIR R4 JSON schema, a well-tested library instead of hand-written rules.
+- **golang.org/x/text:** removes accents from names, so "García" and "Garcia" match when flagging possible duplicate patients.
+- **Docker and Make** so it runs with one command, and **cURL** in `scripts/demo.sh` to demo every endpoint.
 
 ## AI usage
 

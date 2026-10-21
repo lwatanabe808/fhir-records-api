@@ -50,13 +50,12 @@ func get(t *testing.T, h http.Handler, path string, wantStatus int) string {
 func TestErrors(t *testing.T) {
 	h := newTestServer(t, "../../testdata/messy.jsonl")
 	for path, want := range map[string]int{
-		"/patients?limit=abc":                      http.StatusBadRequest,
-		"/patients?gender=robot":                   http.StatusBadRequest,
+		"/internal/patients?limit=abc":             http.StatusBadRequest,
 		"/patients/p1/observations?from=yesterday": http.StatusBadRequest,
 		"/research/cohort?labMin=7":                http.StatusBadRequest, // labMin needs lab
 		"/research/cohort?minAge=60&maxAge=20":     http.StatusBadRequest,
 		"/patients/nobody":                         http.StatusNotFound,
-		"/fhir/Observation/nope":                   http.StatusNotFound,
+		"/internal/fhir/Observation/nope":          http.StatusNotFound,
 		"/no-such-endpoint":                        http.StatusNotFound,
 	} {
 		body := get(t, h, path, want)
@@ -137,7 +136,7 @@ func TestNotesShowDecodedTextAndReasons(t *testing.T) {
 func TestUnsupportedTypeKeptRaw(t *testing.T) {
 	// Immunization has no clean table: it is kept raw, for the data team only.
 	h := newTestServer(t, "../../testdata/messy.jsonl")
-	if body := get(t, h, "/fhir/Immunization/imm1", http.StatusOK); !strings.Contains(body, `"imm1"`) {
+	if body := get(t, h, "/internal/fhir/Immunization/imm1", http.StatusOK); !strings.Contains(body, `"imm1"`) {
 		t.Errorf("Immunization not returned: %s", body)
 	}
 }
@@ -275,9 +274,9 @@ func TestPossibleDuplicatesCountedOnce(t *testing.T) {
 func TestSSNNeverReturned(t *testing.T) {
 	h := newTestServerWithCell(t, "../../testdata/scenarios/13-identifiers.jsonl", 1)
 	for _, path := range []string{
-		"/fhir/Patient/id-a1",
+		"/internal/fhir/Patient/id-a1",
 		"/patients/id-a1",
-		"/data-quality/issues?includeRaw=true",
+		"/internal/data-quality/issues?includeRaw=true",
 		"/research/cohort",
 	} {
 		body := get(t, h, path, http.StatusOK)
@@ -287,7 +286,7 @@ func TestSSNNeverReturned(t *testing.T) {
 			}
 		}
 	}
-	if body := get(t, h, "/fhir/Patient/id-a1", http.StatusOK); !strings.Contains(body, "[redacted]") ||
+	if body := get(t, h, "/internal/fhir/Patient/id-a1", http.StatusOK); !strings.Contains(body, "[redacted]") ||
 		!strings.Contains(body, "MRN-id-a1") {
 		t.Errorf("SSN should be masked and other identifiers kept: %s", body)
 	}

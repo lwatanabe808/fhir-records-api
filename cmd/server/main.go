@@ -50,7 +50,7 @@ func main() {
 		log.Fatalf("load data: %v", err)
 	}
 	log.Printf("database: %s", dbPath)
-	log.Printf("loaded %s: %d lines, %d loaded, %d raw only, %d failed, %d issues (see GET /data-quality/summary) in %dms",
+	log.Printf("loaded %s: %d lines, %d loaded, %d raw only, %d failed, %d issues (see GET /internal/data-quality/summary) in %dms",
 		dataFile, summary.Lines, summary.Loaded, summary.RawOnly, summary.Failed, summary.IssueCount, summary.DurationMS)
 
 	srv := &http.Server{

@@ -1,12 +1,13 @@
 // Package api serves the HTTP endpoints.
 //
-// There are three groups of endpoints, one per kind of user:
+// There are three groups of endpoints, one per kind of user, so access can be
+// controlled by path prefix:
 //
-//	/patients/...      the Novellia app, showing one person their own records
-//	/research/...      life science partners (B2B): de-identified cohorts and counts
-//	/data-quality/...  Novellia's data team: what was wrong with the data and what we did
+//	/patients/{id}/...  the Novellia app, showing one person their own records
+//	/research/...       life science partners (B2B): de-identified cohorts and counts
+//	/internal/...       Novellia staff: the patient list, data quality and original records
 //
-// Plus /fhir/{type}/{id} for the original record and /health.
+// Plus /health.
 package api
 
 import (
@@ -48,7 +49,6 @@ func NewServer(db *sql.DB, summary loader.Summary, opts Options) http.Handler {
 	mux.HandleFunc("GET /health", s.health)
 
 	// Patient app
-	mux.HandleFunc("GET /patients", s.listPatients)
 	mux.HandleFunc("GET /patients/{id}", s.getPatient)
 	mux.HandleFunc("GET /patients/{id}/conditions", s.patientConditions)
 	mux.HandleFunc("GET /patients/{id}/medications", s.patientMedications)
@@ -60,12 +60,11 @@ func NewServer(db *sql.DB, summary loader.Summary, opts Options) http.Handler {
 	mux.HandleFunc("GET /research/cohort", s.cohort)
 	mux.HandleFunc("GET /research/dataset-profile", s.datasetProfile)
 
-	// Data quality
-	mux.HandleFunc("GET /data-quality/summary", s.qualitySummary)
-	mux.HandleFunc("GET /data-quality/issues", s.listIssues)
-
-	// Original records
-	mux.HandleFunc("GET /fhir/{type}/{id}", s.rawRecord)
+	// Internal: Novellia staff only
+	mux.HandleFunc("GET /internal/patients", s.listPatients)
+	mux.HandleFunc("GET /internal/data-quality/summary", s.qualitySummary)
+	mux.HandleFunc("GET /internal/data-quality/issues", s.listIssues)
+	mux.HandleFunc("GET /internal/fhir/{type}/{id}", s.rawRecord)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "no endpoint at "+r.Method+" "+r.URL.Path)

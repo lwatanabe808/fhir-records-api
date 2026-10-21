@@ -12,7 +12,7 @@ import (
 //
 // Records that shouldn't count as real data (entered in error, replaced by a
 // correction, extra duplicates, impossible values) are never shown here. The
-// data team sees them through /data-quality/issues.
+// data team sees them through /internal/data-quality/issues.
 //
 // Each response is a small struct. A *string field is JSON null when the
 // database value is NULL.
@@ -23,7 +23,7 @@ AND replaced_by IS NULL
 AND is_impossible = 0
 AND coalesce(status, '') NOT IN ('entered-in-error', 'cancelled')`
 
-// ---------- GET /patients ----------
+// ---------- GET /internal/patients (staff only) ----------
 
 type patientListItem struct {
 	ID        string  `json:"id"`
@@ -42,36 +42,12 @@ func (s *Server) listPatients(w http.ResponseWriter, r *http.Request) {
 	if paramError(w, err) {
 		return
 	}
-	gender, err := enumParam(r, "gender", "male", "female", "other", "unknown")
-	if paramError(w, err) {
-		return
-	}
-	bornAfter, err := dateParam(r, "bornAfter")
-	if paramError(w, err) {
-		return
-	}
-	bornBefore, err := dateParam(r, "bornBefore")
-	if paramError(w, err) {
-		return
-	}
 
-	// Build the filter from the parameters that were given.
+	// Search by name only if a name was given.
 	where, args := "1=1", []any{}
 	if name := r.URL.Query().Get("name"); name != "" {
-		where += " AND lower(full_name) LIKE ?"
+		where = "lower(full_name) LIKE ?"
 		args = append(args, "%"+strings.ToLower(name)+"%")
-	}
-	if gender != "" {
-		where += " AND gender = ?"
-		args = append(args, gender)
-	}
-	if bornAfter != "" {
-		where += " AND birth_date >= ?"
-		args = append(args, bornAfter)
-	}
-	if bornBefore != "" {
-		where += " AND birth_date <= ?"
-		args = append(args, bornBefore)
 	}
 
 	var total int

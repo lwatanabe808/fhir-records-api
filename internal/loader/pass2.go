@@ -291,7 +291,7 @@ ORDER BY o.patient_id, o.lab_test_code, o.measured_at, o.code_system, o.id`)
 //     If there are several, the lowest id wins.
 //   - Otherwise the lowest id is shown, and the others are hidden as duplicates.
 //
-// Nothing is deleted: hidden readings stay in the table, and /data-quality/issues lists them.
+// Nothing is deleted: hidden readings stay in the table, and /internal/data-quality/issues lists them.
 func (l *Loader) resolveGroup(groupKey string, members []obsRow) error {
 	keep := members[0]
 	for _, m := range members {
