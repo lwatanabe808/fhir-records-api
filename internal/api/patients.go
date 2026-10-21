@@ -18,8 +18,10 @@ import (
 // database value is NULL.
 
 // visibleObservation matches the observations the patient app shows.
-const visibleObservation = `is_primary = 1 AND replaced_by IS NULL AND is_impossible = 0
-	AND coalesce(status, '') NOT IN ('entered-in-error', 'cancelled')`
+const visibleObservation = `is_primary = 1
+AND replaced_by IS NULL
+AND is_impossible = 0
+AND coalesce(status, '') NOT IN ('entered-in-error', 'cancelled')`
 
 // ---------- GET /patients ----------
 
@@ -73,12 +75,19 @@ func (s *Server) listPatients(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM patients WHERE `+where, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRow(`
+SELECT COUNT(*)
+FROM patients
+WHERE `+where, args...).Scan(&total); err != nil {
 		serverError(w, err)
 		return
 	}
-	rows, err := s.db.Query(`SELECT id, full_name, gender, birth_date FROM patients WHERE `+where+`
-		ORDER BY family_name, given_names, id LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	rows, err := s.db.Query(`
+SELECT id, full_name, gender, birth_date
+FROM patients
+WHERE `+where+`
+ORDER BY family_name, given_names, id
+LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -117,8 +126,10 @@ func (s *Server) getPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := patient{ID: id, RecordCounts: map[string]int{}}
-	err := s.db.QueryRow(`SELECT full_name, family_name, given_names, gender, birth_date, active
-		FROM patients WHERE id = ?`, id).Scan(&p.Name, &p.FamilyName, &p.GivenNames, &p.Gender, &p.BirthDate, &p.Active)
+	err := s.db.QueryRow(`
+SELECT full_name, family_name, given_names, gender, birth_date, active
+FROM patients
+WHERE id = ?`, id).Scan(&p.Name, &p.FamilyName, &p.GivenNames, &p.Gender, &p.BirthDate, &p.Active)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -129,7 +140,10 @@ func (s *Server) getPatient(w http.ResponseWriter, r *http.Request) {
 	for key, table := range map[string]string{"conditions": "conditions", "medications": "medications",
 		"observations": "observations", "procedures": "procedures", "notes": "document_references"} {
 		var n int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE patient_id = ?`, id).Scan(&n); err != nil {
+		if err := s.db.QueryRow(`
+SELECT COUNT(*)
+FROM `+table+`
+WHERE patient_id = ?`, id).Scan(&n); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -153,8 +167,9 @@ type condition struct {
 }
 
 func (s *Server) patientConditions(w http.ResponseWriter, r *http.Request) {
-	list, ok := s.newRecordList(w, r, `SELECT id, coalesce(name, label, 'Unspecified condition'), label,
-		code_system, disease_code, clinical_status, verification_status, onset_date FROM conditions`)
+	list, ok := s.newRecordList(w, r, `
+SELECT id, coalesce(name, label, 'Unspecified condition'), label, code_system, disease_code, clinical_status, verification_status, onset_date
+FROM conditions`)
 	if !ok {
 		return
 	}
@@ -167,7 +182,8 @@ func (s *Server) patientConditions(w http.ResponseWriter, r *http.Request) {
 	}
 	list.where(`coalesce(verification_status, '') <> 'entered-in-error'`) // records that shouldn\'t count are never shown
 
-	rows, err := s.db.Query(list.query+` ORDER BY onset_date DESC, id`, list.args...)
+	rows, err := s.db.Query(list.query+`
+ORDER BY onset_date DESC, id`, list.args...)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -201,8 +217,9 @@ type medication struct {
 }
 
 func (s *Server) patientMedications(w http.ResponseWriter, r *http.Request) {
-	list, ok := s.newRecordList(w, r, `SELECT id, coalesce(name, label), label,
-		code_system, drug_code, status, prescribed_at, dosage FROM medications`)
+	list, ok := s.newRecordList(w, r, `
+SELECT id, coalesce(name, label), label, code_system, drug_code, status, prescribed_at, dosage
+FROM medications`)
 	if !ok {
 		return
 	}
@@ -215,7 +232,8 @@ func (s *Server) patientMedications(w http.ResponseWriter, r *http.Request) {
 	}
 	list.where(`coalesce(status, '') <> 'entered-in-error'`) // records that shouldn\'t count are never shown
 
-	rows, err := s.db.Query(list.query+` ORDER BY prescribed_at DESC, id`, list.args...)
+	rows, err := s.db.Query(list.query+`
+ORDER BY prescribed_at DESC, id`, list.args...)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -262,8 +280,9 @@ type component struct {
 
 func (s *Server) patientObservations(w http.ResponseWriter, r *http.Request) {
 	// start to build the LIST query
-	list, ok := s.newRecordList(w, r, `SELECT id, coalesce(name, label), label,
-		code_system, lab_test_code, measured_at, status FROM observations`)
+	list, ok := s.newRecordList(w, r, `
+SELECT id, coalesce(name, label), label, code_system, lab_test_code, measured_at, status
+FROM observations`)
 	if !ok {
 		return
 	}
@@ -286,7 +305,8 @@ func (s *Server) patientObservations(w http.ResponseWriter, r *http.Request) {
 	}
 	list.where(visibleObservation) // records that shouldn\'t count are never shown
 
-	rows, err := s.db.Query(list.query+` ORDER BY measured_at DESC, id`, list.args...)
+	rows, err := s.db.Query(list.query+`
+ORDER BY measured_at DESC, id`, list.args...)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -324,8 +344,11 @@ func (s *Server) addValues(observations []observation) error {
 		byID[observations[i].ID] = &observations[i]
 		ids[i] = observations[i].ID
 	}
-	rows, err := s.db.Query(`SELECT observation_id, is_component, name, lab_test_code, value, value_text, unit
-		FROM observation_values WHERE observation_id IN (`+placeholders(len(ids))+`) ORDER BY rowid`, ids...)
+	rows, err := s.db.Query(`
+SELECT observation_id, is_component, name, lab_test_code, value, value_text, unit
+FROM observation_values
+WHERE observation_id IN (`+placeholders(len(ids))+`)
+ORDER BY rowid`, ids...)
 	if err != nil {
 		return err
 	}
@@ -362,14 +385,16 @@ type procedure struct {
 
 func (s *Server) patientProcedures(w http.ResponseWriter, r *http.Request) {
 	// starts to build the list query
-	list, ok := s.newRecordList(w, r, `SELECT id, coalesce(name, label), label,
-		code_system, procedure_code, status, performed_at, performer FROM procedures`)
+	list, ok := s.newRecordList(w, r, `
+SELECT id, coalesce(name, label), label, code_system, procedure_code, status, performed_at, performer
+FROM procedures`)
 	if !ok {
 		return
 	}
 	list.where(`coalesce(status, '') <> 'entered-in-error'`) // records that shouldn\'t count are never shown
 
-	rows, err := s.db.Query(list.query+` ORDER BY performed_at DESC, id`, list.args...)
+	rows, err := s.db.Query(list.query+`
+ORDER BY performed_at DESC, id`, list.args...)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -411,13 +436,16 @@ type attachment struct {
 }
 
 func (s *Server) patientNotes(w http.ResponseWriter, r *http.Request) {
-	list, ok := s.newRecordList(w, r, `SELECT id, note_type, date, author, status FROM document_references`)
+	list, ok := s.newRecordList(w, r, `
+SELECT id, note_type, date, author, status
+FROM document_references`)
 	if !ok {
 		return
 	}
 	list.where(`coalesce(status, '') <> 'entered-in-error'`) // records that shouldn\'t count are never shown
 
-	rows, err := s.db.Query(list.query+` ORDER BY date DESC, id`, list.args...)
+	rows, err := s.db.Query(list.query+`
+ORDER BY date DESC, id`, list.args...)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -457,7 +485,7 @@ func (s *Server) addAttachments(notes []note) error {
 SELECT a.document_id, a.binary_id, b.id IS NOT NULL, b.content_type, b.size_bytes, b.text, b.data IS NOT NULL
 FROM document_attachments a 
 LEFT JOIN binaries b ON b.id = a.binary_id
-WHERE a.document_id IN (`+placeholders(len(ids))+`) 
+WHERE a.document_id IN (`+placeholders(len(ids))+`)
 ORDER BY a.binary_id`, ids...)
 	if err != nil {
 		return err
@@ -491,7 +519,10 @@ ORDER BY a.binary_id`, ids...)
 // finds the patient for {id}.
 func (s *Server) resolvePatient(w http.ResponseWriter, r *http.Request) string {
 	id := r.PathValue("id")
-	matches, err := s.stringList(`SELECT id FROM patients WHERE lower(id) = lower(?)`, id)
+	matches, err := s.stringList(`
+SELECT id
+FROM patients
+WHERE lower(id) = lower(?)`, id)
 	if err != nil {
 		serverError(w, err)
 		return ""
@@ -520,12 +551,14 @@ func (s *Server) newRecordList(w http.ResponseWriter, r *http.Request, selectFro
 	if id == "" {
 		return nil, false
 	}
-	return &recordList{query: selectFrom + ` WHERE patient_id = ?`, args: []any{id}}, true
+	return &recordList{query: selectFrom + `
+WHERE patient_id = ?`, args: []any{id}}, true
 }
 
 // where adds one filter to the query.
 func (l *recordList) where(cond string, args ...any) {
-	l.query += ` AND ` + cond
+	l.query += `
+AND ` + cond
 	l.args = append(l.args, args...)
 }
 
@@ -570,7 +603,8 @@ func ageOn(birthDate string, now time.Time) (age int, ok bool) {
 		return 0, false
 	}
 	age = now.Year() - b.Year()
-	if now.YearDay() < b.YearDay() {
+	// not had their birthday yet this year
+	if now.Month() < b.Month() || (now.Month() == b.Month() && now.Day() < b.Day()) {
 		age--
 	}
 	return age, true

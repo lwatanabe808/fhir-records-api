@@ -27,21 +27,21 @@ func (s *Server) datasetProfile(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	allIDs, err := s.stringList(`SELECT id FROM patients ORDER BY id`)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	_, extra, err := s.duplicateGroups(allIDs)
+	// Patients with the same name and birth date count once.
+	// Patients missing either one get their own id, so they never match anyone.
+	var all, withoutDuplicates int
+	err = s.db.QueryRow(`
+SELECT COUNT(*), COUNT(DISTINCT coalesce(name_key || '|' || birth_date, id))
+FROM patients`).Scan(&all, &withoutDuplicates)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"patientsWithoutDuplicates":           len(allIDs) - extra, // possible duplicates count once
-		"patientsIncludingPossibleDuplicates": len(allIDs),
-		"possibleDuplicatePatients":           extra,
+		"patientsWithoutDuplicates":           withoutDuplicates,
+		"patientsIncludingPossibleDuplicates": all,
+		"possibleDuplicatePatients":           all - withoutDuplicates,
 		"history":                             history,
 		"population":                          population,
 	})
@@ -49,13 +49,34 @@ func (s *Server) datasetProfile(w http.ResponseWriter, r *http.Request) {
 
 // Union All stacks all thre results based on common columns
 func (s *Server) historyStats() (map[string]any, error) {
-	rows, err := s.db.Query(`SELECT x.patient_id, x.d FROM (
-		SELECT patient_id, measured_at AS d FROM observations WHERE patient_id IS NOT NULL AND measured_at IS NOT NULL
-		UNION ALL SELECT patient_id, onset_date FROM conditions WHERE patient_id IS NOT NULL AND onset_date IS NOT NULL
-		UNION ALL SELECT patient_id, prescribed_at FROM medications WHERE patient_id IS NOT NULL AND prescribed_at IS NOT NULL
-		UNION ALL SELECT patient_id, performed_at FROM procedures WHERE patient_id IS NOT NULL AND performed_at IS NOT NULL
-		UNION ALL SELECT patient_id, date FROM document_references WHERE patient_id IS NOT NULL AND date IS NOT NULL
-		) x`)
+	rows, err := s.db.Query(`
+SELECT x.patient_id, x.d
+FROM (
+    SELECT patient_id, measured_at AS d
+    FROM observations
+    WHERE patient_id IS NOT NULL
+    AND measured_at IS NOT NULL
+    UNION ALL
+    SELECT patient_id, onset_date
+    FROM conditions
+    WHERE patient_id IS NOT NULL
+    AND onset_date IS NOT NULL
+    UNION ALL
+    SELECT patient_id, prescribed_at
+    FROM medications
+    WHERE patient_id IS NOT NULL
+    AND prescribed_at IS NOT NULL
+    UNION ALL
+    SELECT patient_id, performed_at
+    FROM procedures
+    WHERE patient_id IS NOT NULL
+    AND performed_at IS NOT NULL
+    UNION ALL
+    SELECT patient_id, date
+    FROM document_references
+    WHERE patient_id IS NOT NULL
+    AND date IS NOT NULL
+) x`)
 	if err != nil {
 		return nil, err
 	}
@@ -107,13 +128,14 @@ func (s *Server) historyStats() (map[string]any, error) {
 
 // recordsPerPatient counts every record linked to each patient, dated or not.
 func (s *Server) recordsPerPatient() ([]float64, error) {
-	rows, err := s.db.Query(`SELECT
-		(SELECT COUNT(*) FROM observations WHERE patient_id = p.id) +
-		(SELECT COUNT(*) FROM conditions WHERE patient_id = p.id) +
-		(SELECT COUNT(*) FROM medications WHERE patient_id = p.id) +
-		(SELECT COUNT(*) FROM procedures WHERE patient_id = p.id) +
-		(SELECT COUNT(*) FROM document_references WHERE patient_id = p.id)
-		FROM patients p`)
+	rows, err := s.db.Query(`
+SELECT
+    (SELECT COUNT(*) FROM observations WHERE patient_id = p.id) +
+    (SELECT COUNT(*) FROM conditions WHERE patient_id = p.id) +
+    (SELECT COUNT(*) FROM medications WHERE patient_id = p.id) +
+    (SELECT COUNT(*) FROM procedures WHERE patient_id = p.id) +
+    (SELECT COUNT(*) FROM document_references WHERE patient_id = p.id)
+FROM patients p`)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +163,9 @@ func summary(values []float64) map[string]any {
 
 // population gives age bands and gender, with small groups hidden.
 func (s *Server) population() (map[string]any, error) {
-	rows, err := s.db.Query(`SELECT coalesce(gender, 'unknown'), birth_date FROM patients`)
+	rows, err := s.db.Query(`
+SELECT coalesce(gender, 'unknown'), birth_date
+FROM patients`)
 	if err != nil {
 		return nil, err
 	}

@@ -22,13 +22,6 @@ import (
 //   - only trustworthy records: no duplicates, corrections replaced, no
 //     impossible values, no refuted or entered-in-error data
 
-// usableObservation is the filter for observations that research can trust.
-const usableObservation = `o.is_primary = 1 AND o.replaced_by IS NULL AND o.is_impossible = 0
-	AND coalesce(o.status, '') IN ('final', 'amended', 'corrected')`
-
-// usableCondition leaves out diagnoses that were ruled out or entered by mistake.
-const usableCondition = `coalesce(c.verification_status, '') NOT IN ('refuted', 'entered-in-error')`
-
 // researchID turns a patient id into a stable id that can't be turned back.
 // HMAC with a secret key, so nobody can rebuild it by hashing known ids.
 func (s *Server) researchID(patientID string) string {
@@ -88,17 +81,19 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 	if paramError(w, err) {
 		return
 	}
+	// minimum result
 	labMin, err := floatParam(r, "labMin")
 	if paramError(w, err) {
 		return
 	}
+	// maximum result
 	labMax, err := floatParam(r, "labMax")
 	if paramError(w, err) {
 		return
 	}
-	condition, medication, procedure, lab := q.Get("condition"), q.Get("medication"), q.Get("procedure"), q.Get("lab")
+	condition, medication, procedure, labCode := q.Get("condition"), q.Get("medication"), q.Get("procedure"), q.Get("lab")
 	excludeCondition, excludeMedication, excludeProcedure := q.Get("excludeCondition"), q.Get("excludeMedication"), q.Get("excludeProcedure")
-	if (labMin != nil || labMax != nil) && lab == "" {
+	if (labMin != nil || labMax != nil) && labCode == "" {
 		writeError(w, http.StatusBadRequest, "INVALID_PARAMETER", "labMin and labMax need lab, e.g. lab=4548-4 (A1c)")
 		return
 	}
@@ -107,15 +102,16 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// build where clause with arguments
+	// 1. build where clauses for condition, medication, procedure (inclusion and exclusion)
 	where, args := []string{"1=1"}, []any{}
 	if gender != "" {
 		where = append(where, "p.gender = ?")
 		args = append(args, gender)
 	}
 	filters := []struct {
-		value, matcher string
-		include        bool
+		value   string
+		matcher string
+		include bool
 	}{
 		{condition, conditionMatch, true},
 		{medication, medicationMatch, true},
@@ -137,20 +133,26 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 		// each query searches for code / name / label => value / like / like
 		args = append(args, f.value, like, like)
 	}
-	rows, err := s.db.Query(`SELECT p.id, p.gender, p.birth_date FROM patients p WHERE `+strings.Join(where, " AND ")+` ORDER BY p.id`, args...)
+	// builds a name_birthdate_id value so that we can check if identical patients
+	rows, err := s.db.Query(`
+SELECT p.id, p.gender, p.birth_date, coalesce(p.name_key || '|' || p.birth_date, p.id)
+FROM patients p
+WHERE `+strings.Join(where, " AND ")+`
+ORDER BY p.id`, args...)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 	type candidate struct {
-		id     string
-		gender sql.NullString
-		birth  sql.NullString
+		id              string
+		gender          sql.NullString
+		birth           sql.NullString
+		nameBirthdayKey string
 	}
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
-		if err := rows.Scan(&c.id, &c.gender, &c.birth); err != nil {
+		if err := rows.Scan(&c.id, &c.gender, &c.birth, &c.nameBirthdayKey); err != nil {
 			rows.Close()
 			serverError(w, err)
 			return
@@ -159,26 +161,27 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 	}
 	rows.Close()
 
-	// 2. Latest trustworthy lab value per patient, if a lab was asked for.
+	// 2. Return latest lab for each patient based on labcode. We mostly care about right now.
+	// We would want to limit this to only candidates in the future.
 	var labs map[string]latestLab
-	if lab != "" {
-		if labs, err = s.latestLabs(lab); err != nil {
+	if labCode != "" {
+		if labs, err = s.latestLabs(labCode); err != nil {
 			serverError(w, err)
 			return
 		}
 	}
 
-	// 3. Age and lab filters.
+	// 3. Check if age and lab results are outside of the min / max specified by user.
 	now := s.now()
 	var matched []candidate
 	for _, c := range candidates {
-		if minAge > 0 || maxAge < 150 {
+		if q.Has("minAge") || q.Has("maxAge") {
 			age, ok := ageOn(c.birth.String, now)
 			if !ok || age < minAge || age > maxAge {
 				continue
 			}
 		}
-		if lab != "" {
+		if labCode != "" {
 			l, ok := labs[c.id]
 			if !ok || (labMin != nil && l.value < *labMin) || (labMax != nil && l.value > *labMax) {
 				continue
@@ -187,75 +190,88 @@ func (s *Server) cohort(w http.ResponseWriter, r *http.Request) {
 		matched = append(matched, c)
 	}
 
-	// 4. The same person can come from two clinics under two patient ids. They
-	// are never merged, but the count says how many might be duplicates.
-	matchedIDs := make([]string, len(matched))
-	for i, c := range matched {
-		matchedIDs[i] = c.id
+	// 4. The same person can come from two clinics under two patient ids.
+	// We set up a nameBirthdayKey for each matched patient. We group the same nameBirthdayKeys together on the same key
+	// After that, we can count the unique nameBirthdayKeys
+	groups := map[string][]string{} // nameBirthdayKey => patient ids
+	for _, c := range matched {
+		groups[c.nameBirthdayKey] = append(groups[c.nameBirthdayKey], c.id)
 	}
-	dupOf, extra, err := s.duplicateGroups(matchedIDs)
+
+	// 5. De-identified details for this page.
+	// One query for the conditions and one for the medications of every patient on the page.
+	var pageIDs []any
+	for i := offset; i < len(matched) && i < offset+limit; i++ {
+		pageIDs = append(pageIDs, matched[i].id)
+	}
+	conds, err := s.cohortConditions(pageIDs)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-
-	// 5. De-identified details for this page.
+	meds, err := s.cohortMedications(pageIDs)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
 	page := []map[string]any{}
 	for i := offset; i < len(matched) && i < offset+limit; i++ {
 		c := matched[i]
-		conds, err := s.cohortConditions(c.id)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
-		meds, err := s.cohortMedications(c.id)
-		if err != nil {
-			serverError(w, err)
-			return
-		}
 		p := map[string]any{"researchId": s.researchID(c.id), "age": deidentifiedAge(c.birth.String, now),
-			"gender": nullStr(c.gender), "conditions": conds, "medications": meds}
-		if lab != "" {
+			"gender": nullStr(c.gender), "conditions": orEmpty(conds[c.id]), "medications": orEmpty(meds[c.id])}
+		if labCode != "" {
 			l := labs[c.id]
-			p["lab"] = map[string]any{"test": l.name, "code": lab, "value": l.value, "unit": l.unit, "year": yearOnly(l.date)}
+			p["lab"] = map[string]any{"test": l.name, "code": labCode, "value": l.value, "unit": l.unit, "year": yearOnly(l.date)}
 		}
-		if others := dupOf[c.id]; len(others) > 0 {
-			ids := make([]string, len(others))
-			for j, o := range others {
-				ids[j] = s.researchID(o)
+		var others []string
+		for _, id := range groups[c.nameBirthdayKey] {
+			if id != c.id {
+				others = append(others, s.researchID(id))
 			}
-			p["possibleDuplicateOf"] = ids
+		}
+		if len(others) > 0 {
+			p["possibleDuplicateOf"] = others
 		}
 		page = append(page, p)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"criteria": map[string]any{"condition": nullIfEmpty(condition), "medication": nullIfEmpty(medication),
-			"procedure": nullIfEmpty(procedure), "lab": nullIfEmpty(lab), "labMin": labMin, "labMax": labMax,
+			"procedure": nullIfEmpty(procedure), "lab": nullIfEmpty(labCode), "labMin": labMin, "labMax": labMax,
 			"minAge": minAge, "maxAge": maxAge, "gender": nullIfEmpty(gender),
 			"excludeCondition": nullIfEmpty(excludeCondition), "excludeMedication": nullIfEmpty(excludeMedication),
 			"excludeProcedure": nullIfEmpty(excludeProcedure)},
 		// The conservative number: possible duplicate patients count once.
-		"countWithoutDuplicates":           len(matched) - extra,
+		"countWithoutDuplicates":           len(groups),
 		"countIncludingPossibleDuplicates": len(matched),
-		"possibleDuplicatePatients":        extra,
+		"possibleDuplicatePatients":        len(matched) - len(groups),
 		"limit":                            limit,
 		"offset":                           offset,
 		"patients":                         page,
 	})
 }
 
-// Matchers for inclusion and exclusion criteria. Each takes the value three
-// times: an exact code, then a name and a label containing the text.
+// matches on disease_code, name, or label.
+// excludes matches that were refuted or entered in error
 const (
-	conditionMatch = `SELECT 1 FROM conditions c WHERE c.patient_id = p.id AND ` + usableCondition + `
-		AND (c.disease_code = ? OR lower(c.name) LIKE ? OR lower(c.label) LIKE ?)`
-	medicationMatch = `SELECT 1 FROM medications m WHERE m.patient_id = p.id
-		AND coalesce(m.status, '') <> 'entered-in-error'
-		AND (m.drug_code = ? OR lower(m.name) LIKE ? OR lower(m.label) LIKE ?)`
-	procedureMatch = `SELECT 1 FROM procedures pr WHERE pr.patient_id = p.id
-		AND coalesce(pr.status, '') NOT IN ('entered-in-error', 'not-done')
-		AND (pr.procedure_code = ? OR lower(pr.name) LIKE ? OR lower(pr.label) LIKE ?)`
+	conditionMatch = `
+SELECT 1
+FROM conditions c
+WHERE c.patient_id = p.id
+AND coalesce(c.verification_status, '') NOT IN ('refuted', 'entered-in-error')
+AND (c.disease_code = ? OR lower(c.name) LIKE ? OR lower(c.label) LIKE ?)`
+	medicationMatch = `
+SELECT 1
+FROM medications m
+WHERE m.patient_id = p.id
+AND coalesce(m.status, '') <> 'entered-in-error'
+AND (m.drug_code = ? OR lower(m.name) LIKE ? OR lower(m.label) LIKE ?)`
+	procedureMatch = `
+SELECT 1
+FROM procedures pr
+WHERE pr.patient_id = p.id
+AND coalesce(pr.status, '') NOT IN ('entered-in-error', 'not-done')
+AND (pr.procedure_code = ? OR lower(pr.name) LIKE ? OR lower(pr.label) LIKE ?)`
 )
 
 // cell hides a count below the minimum cell size, so a small group can't
@@ -267,56 +283,22 @@ func (s *Server) cell(n int) any {
 	return n
 }
 
-// duplicateGroups finds possible duplicates within a list of patient ids: the
-// same name (ignoring case, accents and punctuation) and birth date.
-//
-// dupOf lists, for each id, the other ids in the list that may be the same
-// person. extra is how many ids are extra (beyond the first in each group), so
-// len(ids) - extra is the count without possible duplicates.
-func (s *Server) duplicateGroups(ids []string) (dupOf map[string][]string, extra int, err error) {
-	dupOf = map[string][]string{}
-	if len(ids) < 2 {
-		return dupOf, 0, nil
-	}
-	in := map[string]bool{}
-	for _, id := range ids {
-		in[id] = true
-	}
-	rows, err := s.db.Query(`SELECT a.id, b.id FROM patients a JOIN patients b
-		ON a.id <> b.id AND a.name_key = b.name_key AND a.birth_date = b.birth_date
-		ORDER BY 1, 2`)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var a, b string
-		if err := rows.Scan(&a, &b); err != nil {
-			return nil, 0, err
-		}
-		if in[a] && in[b] {
-			dupOf[a] = append(dupOf[a], b)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, err
-	}
-	for _, id := range ids {
-		if isExtraDuplicate(id, dupOf) {
-			extra++
-		}
-	}
-	return dupOf, extra, nil
-}
-
 func (s *Server) latestLabs(code string) (map[string]latestLab, error) {
 	// Keyed by patient: each patient's latest value.
 	// observation_values holds single results and components alike, so a part
 	// like systolic blood pressure can be searched by its own lab test code.
-	rows, err := s.db.Query(`SELECT o.patient_id, v.value, coalesce(v.unit, ''), o.measured_at, coalesce(v.name, o.name, o.label, '')
-		FROM observation_values v JOIN observations o ON o.id = v.observation_id
-		WHERE o.patient_id IS NOT NULL AND v.lab_test_code = ? AND v.value IS NOT NULL AND `+usableObservation+`
-		ORDER BY o.patient_id, o.measured_at DESC`, code)
+	rows, err := s.db.Query(`
+SELECT o.patient_id, v.value, coalesce(v.unit, ''), o.measured_at, coalesce(v.name, o.name, o.label, '')
+FROM observation_values v
+JOIN observations o ON o.id = v.observation_id
+WHERE o.patient_id IS NOT NULL
+AND v.lab_test_code = ?
+AND v.value IS NOT NULL
+AND o.is_primary = 1
+AND o.replaced_by IS NULL
+AND o.is_impossible = 0
+AND coalesce(o.status, '') IN ('final', 'amended', 'corrected')
+ORDER BY o.patient_id, o.measured_at DESC`, code)
 	if err != nil {
 		return nil, err
 	}
@@ -335,49 +317,65 @@ func (s *Server) latestLabs(code string) (map[string]latestLab, error) {
 	return out, rows.Err()
 }
 
-func (s *Server) cohortConditions(patientID string) ([]map[string]any, error) {
-	rows, err := s.db.Query(`SELECT c.disease_code, coalesce(c.name, c.label), c.clinical_status, c.onset_date
-		FROM conditions c WHERE c.patient_id = ? AND c.disease_code IS NOT NULL AND `+usableCondition+` ORDER BY c.onset_date`, patientID)
+// cohortConditions returns each patient's conditions, keyed by patient id.
+func (s *Server) cohortConditions(patientIDs []any) (map[string][]map[string]any, error) {
+	out := map[string][]map[string]any{}
+	if len(patientIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.Query(`
+SELECT c.patient_id, c.disease_code, coalesce(c.name, c.label), c.clinical_status, c.onset_date
+FROM conditions c
+WHERE c.patient_id IN (`+placeholders(len(patientIDs))+`)
+AND c.disease_code IS NOT NULL
+AND coalesce(c.verification_status, '') NOT IN ('refuted', 'entered-in-error')
+ORDER BY c.onset_date`, patientIDs...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []map[string]any{}
 	for rows.Next() {
+		var patientID string
 		var code, name, status, onset sql.NullString
-		if err := rows.Scan(&code, &name, &status, &onset); err != nil {
+		if err := rows.Scan(&patientID, &code, &name, &status, &onset); err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{"name": nullStr(name), "diseaseCode": nullStr(code), "status": nullStr(status), "onsetYear": yearOnly(onset)})
+		out[patientID] = append(out[patientID], map[string]any{"name": nullStr(name), "diseaseCode": nullStr(code), "status": nullStr(status), "onsetYear": yearOnly(onset)})
 	}
 	return out, rows.Err()
 }
 
-func (s *Server) cohortMedications(patientID string) ([]map[string]any, error) {
-	rows, err := s.db.Query(`SELECT drug_code, coalesce(name, label), status FROM medications
-		WHERE patient_id = ? AND coalesce(status, '') <> 'entered-in-error' ORDER BY prescribed_at`, patientID)
+// cohortMedications returns each patient's medications, keyed by patient id.
+func (s *Server) cohortMedications(patientIDs []any) (map[string][]map[string]any, error) {
+	out := map[string][]map[string]any{}
+	if len(patientIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.Query(`
+SELECT patient_id, drug_code, coalesce(name, label), status
+FROM medications
+WHERE patient_id IN (`+placeholders(len(patientIDs))+`)
+AND coalesce(status, '') <> 'entered-in-error'
+ORDER BY prescribed_at`, patientIDs...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []map[string]any{}
 	for rows.Next() {
+		var patientID string
 		var code, name, status sql.NullString
-		if err := rows.Scan(&code, &name, &status); err != nil {
+		if err := rows.Scan(&patientID, &code, &name, &status); err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{"name": nullStr(name), "drugCode": nullStr(code), "status": nullStr(status)})
+		out[patientID] = append(out[patientID], map[string]any{"name": nullStr(name), "drugCode": nullStr(code), "status": nullStr(status)})
 	}
 	return out, rows.Err()
 }
 
-// isExtraDuplicate reports whether id is not the first (alphabetically) in its
-// possible duplicate group.
-func isExtraDuplicate(id string, dupOf map[string][]string) bool {
-	for _, other := range dupOf[id] {
-		if other < id {
-			return true
-		}
+// orEmpty turns a missing list into [] so the JSON shows an empty list, not null.
+func orEmpty(list []map[string]any) []map[string]any {
+	if list == nil {
+		return []map[string]any{}
 	}
-	return false
+	return list
 }

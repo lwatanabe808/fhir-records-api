@@ -59,7 +59,9 @@ func (l *Loader) linkPatients() error {
 type patientIndex map[string][]string
 
 func (l *Loader) loadPatientIndex() (patientIndex, error) {
-	rows, err := l.tx.Query(`SELECT id FROM patients`)
+	rows, err := l.tx.Query(`
+SELECT id
+FROM patients`)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +107,10 @@ type patientLink struct {
 // that don't match or only match by ignoring capital letters.
 func (l *Loader) linkTable(table, resourceType string, patients patientIndex) error {
 	// find all records in the db
-	links, err := l.readLinks(`SELECT id, raw_resource_id, patient_ref FROM ` + table + ` WHERE patient_ref IS NOT NULL`)
+	links, err := l.readLinks(`
+SELECT id, raw_resource_id, patient_ref
+FROM ` + table + `
+WHERE patient_ref IS NOT NULL`)
 	if err != nil {
 		return err
 	}
@@ -130,7 +135,10 @@ func (l *Loader) linkTable(table, resourceType string, patients patientIndex) er
 				return err
 			}
 		}
-		if _, err := l.tx.Exec(`UPDATE `+table+` SET patient_id = ? WHERE id = ?`, patientID, link.id); err != nil {
+		if _, err := l.tx.Exec(`
+UPDATE `+table+`
+SET patient_id = ?
+WHERE id = ?`, patientID, link.id); err != nil {
 			return err
 		}
 	}
@@ -165,9 +173,9 @@ func (l *Loader) checkAttachments() error {
 	if err := l.flagRows(
 		`
 SELECT a.document_id, d.raw_resource_id, 'Binary/' || a.binary_id || ' is not in the file'
-FROM document_attachments a 
+FROM document_attachments a
 JOIN document_references d ON d.id = a.document_id
-LEFT JOIN binaries b ON b.id = a.binary_id 
+LEFT JOIN binaries b ON b.id = a.binary_id
 WHERE b.id IS NULL`,
 		Issue{RecordType: "DocumentReference", Type: BinaryBrokenReference, Severity: Warning,
 			Field: "content.attachment.url", ActionTaken: "note has no text for this attachment"}); err != nil {
@@ -178,11 +186,11 @@ WHERE b.id IS NULL`,
 	if err := l.flagRows(
 		`
 SELECT a.document_id, d.raw_resource_id,'note says ' || a.content_type || ', Binary/' || a.binary_id || ' says ' || b.content_type
-FROM document_attachments a 
+FROM document_attachments a
 JOIN document_references d ON d.id = a.document_id
 JOIN binaries b ON b.id = a.binary_id
-WHERE b.is_inline = 0 
-AND a.content_type IS NOT NULL 
+WHERE b.is_inline = 0
+AND a.content_type IS NOT NULL
 AND a.content_type <> b.content_type`, // disagree
 		Issue{RecordType: "DocumentReference", Type: ContentTypeMismatch, Severity: Warning,
 			Field: "content.attachment.contentType", ActionTaken: "trusted the Binary's type"}); err != nil {
@@ -194,11 +202,10 @@ AND a.content_type <> b.content_type`, // disagree
 	return l.flagRows(
 		`
 SELECT b.id, b.raw_resource_id, 'no DocumentReference links to this Binary, so its patient is unknown'
-FROM binaries b 
+FROM binaries b
 LEFT JOIN document_attachments a ON a.binary_id = b.id
-WHERE a.binary_id IS NULL 
-AND b.is_inline = 0
-`,
+WHERE a.binary_id IS NULL
+AND b.is_inline = 0`,
 		Issue{RecordType: "Binary", Type: OrphanBinary, Severity: Info, ActionTaken: "kept, not shown on any chart"})
 }
 
@@ -241,12 +248,14 @@ type obsRow struct {
 // Group each equivalent Observation together in the GroupsMap
 // if a key has more than 1, it means there are duplicates
 func (l *Loader) groupObservations() error {
-	rows, err := l.tx.Query(`SELECT o.id, coalesce(o.status, ''), o.raw_resource_id,
-			o.patient_id || '|' || coalesce(o.code_system, '') || '|' || o.lab_test_code || '|' || o.measured_at AS grp
-		FROM observations o
-		WHERE o.patient_id IS NOT NULL AND o.lab_test_code IS NOT NULL AND o.measured_at LIKE '%T%'
-		  AND coalesce(o.status, '') <> 'entered-in-error'
-		ORDER BY o.patient_id, o.lab_test_code, o.measured_at, o.code_system, o.id`)
+	rows, err := l.tx.Query(`
+SELECT o.id, coalesce(o.status, ''), o.raw_resource_id, o.patient_id || '|' || coalesce(o.code_system, '') || '|' || o.lab_test_code || '|' || o.measured_at AS grp
+FROM observations o
+WHERE o.patient_id IS NOT NULL
+AND o.lab_test_code IS NOT NULL
+AND o.measured_at LIKE '%T%'
+AND coalesce(o.status, '') <> 'entered-in-error'
+ORDER BY o.patient_id, o.lab_test_code, o.measured_at, o.code_system, o.id`)
 	if err != nil {
 		return err
 	}
@@ -306,7 +315,10 @@ func (l *Loader) resolveGroup(groupKey string, members []obsRow) error {
 			continue
 		// for all correction duplicates, set the replaced_by and is_primary=no
 		case isCorrection:
-			if _, err := l.tx.Exec(`UPDATE observations SET replaced_by = ?, is_primary = 0 WHERE id = ?`, keep.id, m.id); err != nil {
+			if _, err := l.tx.Exec(`
+UPDATE observations
+SET replaced_by = ?, is_primary = 0
+WHERE id = ?`, keep.id, m.id); err != nil {
 				return err
 			}
 			issue.Type, issue.Severity, issue.Field = Superseded, Info, "status"
@@ -318,7 +330,10 @@ func (l *Loader) resolveGroup(groupKey string, members []obsRow) error {
 			issue.Detail = "same patient, lab test code and time as " + others(ids, m.id)
 			issue.ActionTaken = "primary (lowest id)"
 			if m.id != keep.id {
-				if _, err := l.tx.Exec(`UPDATE observations SET is_primary = 0 WHERE id = ?`, m.id); err != nil {
+				if _, err := l.tx.Exec(`
+UPDATE observations
+SET is_primary = 0
+WHERE id = ?`, m.id); err != nil {
 					return err
 				}
 				issue.ActionTaken = "hidden by default, primary is " + keep.id
@@ -344,8 +359,8 @@ func (l *Loader) flagSameNameAndBirth() error {
 		`
 SELECT p.id, p.raw_resource_id,p.full_name || ', born ' || p.birth_date || ', also appears as ' || group_concat(q.id, ', ')
 FROM patients p
-JOIN patients q ON q.name_key = p.name_key 
-AND q.birth_date = p.birth_date 
+JOIN patients q ON q.name_key = p.name_key
+AND q.birth_date = p.birth_date
 AND q.id <> p.id
 GROUP BY p.id
 ORDER BY p.id`,

@@ -34,8 +34,9 @@ func insertDocumentReference(rec *recordCtx) error {
 	if len(d.Author) > 0 {
 		author = d.Author[0].Reference
 	}
-	if err := rec.l.exec(`INSERT INTO document_references (id, raw_resource_id, patient_ref, status, note_type, note_type_code, date, author)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	if err := rec.l.exec(`
+INSERT INTO document_references (id, raw_resource_id, patient_ref, status, note_type, note_type_code, date, author)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.id, rec.line, patientRef, status, noteType.Name(),
 		noteType.Code, date, author); err != nil {
 		return err
@@ -92,7 +93,9 @@ func insertDocumentReference(rec *recordCtx) error {
 }
 
 func linkAttachment(rec *recordCtx, binaryID, declaredType string) error {
-	return rec.l.exec(`INSERT OR IGNORE INTO document_attachments (document_id, binary_id, content_type) VALUES (?, ?, ?)`,
+	return rec.l.exec(`
+INSERT OR IGNORE INTO document_attachments (document_id, binary_id, content_type)
+VALUES (?, ?, ?)`,
 		rec.id, binaryID, baseType(declaredType))
 }
 
@@ -168,8 +171,9 @@ func (rec *recordCtx) storeBinary(id, declaredType, data string, inline bool) er
 			}
 		}
 	}
-	return rec.l.exec(`INSERT INTO binaries (id, raw_resource_id, content_type, size_bytes, text, data, is_inline)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, id, rec.line, contentType, size, text, decoded, inline)
+	return rec.l.exec(`
+INSERT INTO binaries (id, raw_resource_id, content_type, size_bytes, text, data, is_inline)
+VALUES (?, ?, ?, ?, ?, ?, ?)`, id, rec.line, contentType, size, text, decoded, inline)
 }
 
 // baseType returns "text/plain" for "text/plain; charset=utf-8", or "" if invalid.

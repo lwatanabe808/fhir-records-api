@@ -39,23 +39,32 @@ func SupportedTypes() []string {
 
 func removeFrom(table string) func(*sql.Tx, string) error {
 	return func(tx *sql.Tx, id string) error {
-		_, err := tx.Exec(`DELETE FROM `+table+` WHERE id = ?`, id)
+		_, err := tx.Exec(`
+DELETE FROM `+table+`
+WHERE id = ?`, id)
 		return err
 	}
 }
 
 func removeObservation(tx *sql.Tx, id string) error {
-	if _, err := tx.Exec(`DELETE FROM observation_values WHERE observation_id = ?`, id); err != nil {
+	if _, err := tx.Exec(`
+DELETE FROM observation_values
+WHERE observation_id = ?`, id); err != nil {
 		return err
 	}
 	return removeFrom("observations")(tx, id)
 }
 
 func removeDocument(tx *sql.Tx, id string) error {
-	if _, err := tx.Exec(`DELETE FROM document_attachments WHERE document_id = ?`, id); err != nil {
+	if _, err := tx.Exec(`
+DELETE FROM document_attachments
+WHERE document_id = ?`, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM binaries WHERE is_inline = 1 AND id LIKE ?`, id+"-inline-%"); err != nil {
+	if _, err := tx.Exec(`
+DELETE FROM binaries
+WHERE is_inline = 1
+AND id LIKE ?`, id+"-inline-%"); err != nil {
 		return err
 	}
 	return removeFrom("document_references")(tx, id)
@@ -101,9 +110,9 @@ func insertPatient(rec *recordCtx) error {
 		p.Active = nil // wrong type: Go's decoder may have left false here
 	}
 
-	return rec.l.exec(`INSERT INTO patients (id, raw_resource_id, full_name, family_name, given_names, gender, birth_date,
-			deceased_date, active, name_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	return rec.l.exec(`
+INSERT INTO patients (id, raw_resource_id, full_name, family_name, given_names, gender, birth_date, deceased_date, active, name_key)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.id, rec.line, fullName, name.Family, givenNames, gender, birthDate, deceased, p.Active,
 		nameKey(fullName))
 }
@@ -209,9 +218,9 @@ func insertObservation(rec *recordCtx) error {
 		comps = append(comps, component{comp.Code.First(), v})
 	}
 
-	if err := rec.l.exec(`INSERT INTO observations (id, raw_resource_id, patient_ref, code_system, lab_test_code, name, label,
-			status, measured_at, last_updated, issued, is_impossible)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	if err := rec.l.exec(`
+INSERT INTO observations (id, raw_resource_id, patient_ref, code_system, lab_test_code, name, label, status, measured_at, last_updated, issued, is_impossible)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.id, rec.line, patientRef, code.System, code.Code, code.Display, code.Text, status, measuredAt,
 		lastUpdated, issued, impossible); err != nil {
 		return err
@@ -233,8 +242,9 @@ func insertObservation(rec *recordCtx) error {
 
 // saveValue saves one result value of the observation into observation_values.
 func saveValue(rec *recordCtx, isComponent bool, coding fhir.Coding, v obsValue) error {
-	return rec.l.exec(`INSERT INTO observation_values (observation_id, is_component, code_system, lab_test_code, name, value, value_text, unit)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	return rec.l.exec(`
+INSERT INTO observation_values (observation_id, is_component, code_system, lab_test_code, name, value, value_text, unit)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.id, isComponent, coding.System, coding.Code, coding.Name(), v.value, v.valueText, v.unit)
 }
 
@@ -357,9 +367,9 @@ func insertCondition(rec *recordCtx) error {
 	// take the first status code and check if it's one of the valid statuses.
 	clinical := allowed(c.ClinicalStatus.First().Code, "active", "recurrence", "relapse", "inactive", "remission", "resolved")
 	verification := allowed(c.VerificationStatus.First().Code, "unconfirmed", "provisional", "differential", "confirmed", "refuted", "entered-in-error")
-	return rec.l.exec(`INSERT INTO conditions (id, raw_resource_id, patient_ref, code_system, disease_code, name, label,
-			clinical_status, verification_status, onset_date)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	return rec.l.exec(`
+INSERT INTO conditions (id, raw_resource_id, patient_ref, code_system, disease_code, name, label, clinical_status, verification_status, onset_date)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.id, rec.line, patientRef, code.System, code.Code,
 		code.Display, code.Text, clinical, verification, onset)
 }
@@ -395,9 +405,9 @@ func insertMedication(rec *recordCtx) error {
 	}
 	status := allowed(m.Status, "active", "on-hold", "cancelled", "completed", "entered-in-error", "stopped", "draft", "unknown")
 	intent := allowed(m.Intent, "proposal", "plan", "order", "original-order", "reflex-order", "filler-order", "instance-order", "option")
-	return rec.l.exec(`INSERT INTO medications (id, raw_resource_id, patient_ref, code_system, drug_code, name, label,
-			status, intent, prescribed_at, dosage)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	return rec.l.exec(`
+INSERT INTO medications (id, raw_resource_id, patient_ref, code_system, drug_code, name, label, status, intent, prescribed_at, dosage)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.id, rec.line, patientRef, code.System, code.Code,
 		code.Display, code.Text, status, intent,
 		prescribedAt, strings.Join(dosage, "; "))
@@ -432,9 +442,9 @@ func insertProcedure(rec *recordCtx) error {
 		performer = p.Performer[0].Actor.Reference
 	}
 	status := allowed(p.Status, "preparation", "in-progress", "not-done", "on-hold", "stopped", "completed", "entered-in-error", "unknown")
-	return rec.l.exec(`INSERT INTO procedures (id, raw_resource_id, patient_ref, code_system, procedure_code, name, label,
-			status, performed_at, performer)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	return rec.l.exec(`
+INSERT INTO procedures (id, raw_resource_id, patient_ref, code_system, procedure_code, name, label, status, performed_at, performer)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.id, rec.line, patientRef, code.System, code.Code,
 		code.Display, code.Text, status, performedAt, performer)
 }

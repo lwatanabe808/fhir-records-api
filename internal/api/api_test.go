@@ -302,3 +302,22 @@ func TestComponentSearchableByOwnCode(t *testing.T) {
 		t.Errorf("systolic should be found by its own lab test code: %s", body)
 	}
 }
+
+func TestAgeOn(t *testing.T) {
+	cases := []struct {
+		birth, today string
+		want         int
+	}{
+		{"2000-03-01", "2026-03-01", 26}, // birthday today, after Feb 29 in a leap birth year
+		{"2000-03-01", "2026-02-28", 25}, // day before birthday
+		{"1990-12-31", "2026-01-01", 35},
+		{"2000-02-29", "2026-02-28", 25}, // leap day birthday, not yet in a non-leap year
+		{"2000-02-29", "2026-03-01", 26},
+	}
+	for _, c := range cases {
+		today, _ := time.Parse("2006-01-02", c.today)
+		if got, ok := ageOn(c.birth, today); !ok || got != c.want {
+			t.Errorf("ageOn(%s, %s) = %d, want %d", c.birth, c.today, got, c.want)
+		}
+	}
+}

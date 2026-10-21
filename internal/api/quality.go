@@ -22,7 +22,9 @@ func (s *Server) qualitySummary(w http.ResponseWriter, r *http.Request) {
 	clean := map[string]int{}
 	for key, table := range tables {
 		var n int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
+		if err := s.db.QueryRow(`
+SELECT COUNT(*)
+FROM ` + table).Scan(&n); err != nil {
 			serverError(w, err)
 			return
 		}
@@ -31,7 +33,11 @@ func (s *Server) qualitySummary(w http.ResponseWriter, r *http.Request) {
 
 	bySeverity := map[string]int{}
 	byType := []map[string]any{}
-	rows, err := s.db.Query(`SELECT issue_type, severity, COUNT(*) FROM issues GROUP BY issue_type, severity ORDER BY 3 DESC, 1`)
+	rows, err := s.db.Query(`
+SELECT issue_type, severity, COUNT(*)
+FROM issues
+GROUP BY issue_type, severity
+ORDER BY 3 DESC, 1`)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -51,12 +57,30 @@ func (s *Server) qualitySummary(w http.ResponseWriter, r *http.Request) {
 	// Completeness: how often key fields are filled in. This is what research
 	// partners ask about first ("how complete is your data?").
 	completeness, err := s.percentages(map[string]string{
-		"patientsWithBirthDate":       `SELECT avg(birth_date IS NOT NULL) FROM patients`,
-		"patientsWithGender":          `SELECT avg(gender IS NOT NULL) FROM patients`,
-		"observationsLinkedToPatient": `SELECT avg(patient_id IS NOT NULL) FROM observations`,
-		"observationsWithCode":        `SELECT avg(lab_test_code IS NOT NULL) FROM observations`,
-		"conditionsWithCode":          `SELECT avg(disease_code IS NOT NULL) FROM conditions`,
-		"notesWithText":               `SELECT avg(EXISTS (SELECT 1 FROM document_attachments a JOIN binaries b ON b.id = a.binary_id WHERE a.document_id = d.id AND b.text IS NOT NULL)) FROM document_references d`,
+		"patientsWithBirthDate": `
+SELECT avg(birth_date IS NOT NULL)
+FROM patients`,
+		"patientsWithGender": `
+SELECT avg(gender IS NOT NULL)
+FROM patients`,
+		"observationsLinkedToPatient": `
+SELECT avg(patient_id IS NOT NULL)
+FROM observations`,
+		"observationsWithCode": `
+SELECT avg(lab_test_code IS NOT NULL)
+FROM observations`,
+		"conditionsWithCode": `
+SELECT avg(disease_code IS NOT NULL)
+FROM conditions`,
+		"notesWithText": `
+SELECT avg(EXISTS (
+    SELECT 1
+    FROM document_attachments a
+    JOIN binaries b ON b.id = a.binary_id
+    WHERE a.document_id = d.id
+    AND b.text IS NOT NULL
+))
+FROM document_references d`,
 	})
 	if err != nil {
 		serverError(w, err)
@@ -116,14 +140,20 @@ func (s *Server) listIssues(w http.ResponseWriter, r *http.Request) {
 	cond := strings.Join(where, " AND ")
 
 	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM issues i WHERE `+cond, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRow(`
+SELECT COUNT(*)
+FROM issues i
+WHERE `+cond, args...).Scan(&total); err != nil {
 		serverError(w, err)
 		return
 	}
-	rows, err := s.db.Query(`SELECT i.id, i.raw_resource_id, i.record_type, i.record_id, i.issue_type, i.severity,
-			i.field, i.detail, i.action_taken, i.group_key, coalesce(rr.raw_json, rr.raw_text)
-		FROM issues i LEFT JOIN raw_resources rr ON rr.id = i.raw_resource_id
-		WHERE `+cond+` ORDER BY i.raw_resource_id, i.id LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	rows, err := s.db.Query(`
+SELECT i.id, i.raw_resource_id, i.record_type, i.record_id, i.issue_type, i.severity, i.field, i.detail, i.action_taken, i.group_key, coalesce(rr.raw_json, rr.raw_text)
+FROM issues i
+LEFT JOIN raw_resources rr ON rr.id = i.raw_resource_id
+WHERE `+cond+`
+ORDER BY i.raw_resource_id, i.id
+LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -162,8 +192,14 @@ func (s *Server) listIssues(w http.ResponseWriter, r *http.Request) {
 // than once, the last copy is returned.
 func (s *Server) rawRecord(w http.ResponseWriter, r *http.Request) {
 	var raw string
-	err := s.db.QueryRow(`SELECT raw_json FROM raw_resources WHERE resource_type = ? AND fhir_id = ? AND raw_json IS NOT NULL
-		ORDER BY id DESC LIMIT 1`, r.PathValue("type"), r.PathValue("id")).Scan(&raw)
+	err := s.db.QueryRow(`
+SELECT raw_json
+FROM raw_resources
+WHERE resource_type = ?
+AND fhir_id = ?
+AND raw_json IS NOT NULL
+ORDER BY id DESC
+LIMIT 1`, r.PathValue("type"), r.PathValue("id")).Scan(&raw)
 	if err == sql.ErrNoRows {
 		writeError(w, http.StatusNotFound, "RECORD_NOT_FOUND", "no "+r.PathValue("type")+" with id "+r.PathValue("id"))
 		return

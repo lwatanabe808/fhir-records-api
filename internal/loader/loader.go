@@ -126,7 +126,9 @@ func Load(ctx context.Context, db *sql.DB, r io.Reader, schema *validate.Schema,
 		return l.summary, fmt.Errorf("second pass: %w", err)
 	}
 
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM issues`).Scan(&l.summary.IssueCount); err != nil {
+	if err := tx.QueryRow(`
+SELECT COUNT(*)
+FROM issues`).Scan(&l.summary.IssueCount); err != nil {
 		return l.summary, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -150,7 +152,9 @@ func (l *Loader) processLine(lineNo int64, line []byte) error {
 	var parsed any
 	if err := json.Unmarshal(line, &parsed); err != nil {
 		l.summary.Failed++
-		if err := l.exec(`INSERT INTO raw_resources (id, parsed_ok, raw_text) VALUES (?, 0, ?)`, lineNo, string(line)); err != nil {
+		if err := l.exec(`
+INSERT INTO raw_resources (id, parsed_ok, raw_text)
+VALUES (?, 0, ?)`, lineNo, string(line)); err != nil {
 			return err
 		}
 		return l.addIssue(Issue{RawResourceID: lineNo, Type: InvalidJSON, Severity: Error,
@@ -163,7 +167,9 @@ func (l *Loader) processLine(lineNo int64, line []byte) error {
 	resourceType, _ := record["resourceType"].(string)
 	if !isObject || resourceType == "" {
 		l.summary.Failed++
-		if err := l.exec(`INSERT INTO raw_resources (id, parsed_ok, raw_text) VALUES (?, 1, ?)`, lineNo, string(line)); err != nil {
+		if err := l.exec(`
+INSERT INTO raw_resources (id, parsed_ok, raw_text)
+VALUES (?, 1, ?)`, lineNo, string(line)); err != nil {
 			return err
 		}
 		return l.addIssue(Issue{RawResourceID: lineNo, Type: MalformedResource, Severity: Error,
@@ -258,8 +264,9 @@ func (l *Loader) insertRaw(rec *recordCtx, keepJSON bool) error {
 	if keepJSON {
 		rawJSON = string(rec.raw)
 	}
-	return l.exec(`INSERT INTO raw_resources (id, resource_type, fhir_id, parsed_ok, raw_json)
-		VALUES (?, ?, ?, 1, ?)`, rec.line, rec.resourceType, rec.id, rawJSON)
+	return l.exec(`
+INSERT INTO raw_resources (id, resource_type, fhir_id, parsed_ok, raw_json)
+VALUES (?, ?, ?, 1, ?)`, rec.line, rec.resourceType, rec.id, rawJSON)
 }
 
 // checkDuplicateID handles a type + id seen earlier in the file:
@@ -357,8 +364,9 @@ func (l *Loader) addIssues(issues []Issue) error {
 }
 
 func (l *Loader) addIssue(i Issue) error {
-	return l.exec(`INSERT INTO issues (raw_resource_id, record_type, record_id, issue_type, severity, field, detail, action_taken, group_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	return l.exec(`
+INSERT INTO issues (raw_resource_id, record_type, record_id, issue_type, severity, field, detail, action_taken, group_key)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nullableInt(i.RawResourceID), i.RecordType, i.RecordID, i.Type, i.Severity, i.Field, i.Detail, i.ActionTaken, i.GroupKey)
 }
 
