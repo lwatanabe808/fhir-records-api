@@ -115,6 +115,45 @@
           }
         },
         {
+          "name": "Observations: all",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/{{patientId}}/observations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients",
+                "{{patientId}}",
+                "observations"
+              ],
+              "query": [
+                {
+                  "key": "code",
+                  "value": "4548-4",
+                  "description": "LOINC lab test code",
+                  "disabled": true
+                },
+                {
+                  "key": "from",
+                  "value": "2024-01-01",
+                  "description": "earliest date",
+                  "disabled": true
+                },
+                {
+                  "key": "to",
+                  "value": "2025-12-31",
+                  "description": "latest date",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Every lab result and vital for the patient. Tick code, from or to under Params to filter."
+          }
+        },
+        {
           "name": "Observations: A1c",
           "request": {
             "method": "GET",

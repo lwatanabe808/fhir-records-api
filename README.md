@@ -148,13 +148,6 @@ Found by stress testing with tricky records and up to 100,000 patients:
 - **Patient links by medical record number, FHIR Bundles, and drugs given by reference** aren't read. Each is logged as an issue and kept raw.
 - **Scale:** 100,000 patients take about 44 seconds to load and 1.3 seconds for a lab search, both growing in a straight line.
 
-## Authentication (not built)
-
-- **Login:** OAuth 2.0 / OpenID Connect, with a signed token saying who the caller is and their role.
-- **Patients** reach only their own records. Mismatches return 404, so the API doesn't confirm a record exists.
-- **Research partners** reach only `/research/...`.
-- **Staff** reach `/internal/...`, with every access logged, as HIPAA expects.
-
 ## A decision I'm not fully satisfied with
 
 > *Draft. Replace with your own choice before recording.*
