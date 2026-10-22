@@ -157,6 +157,9 @@ func TestScenarioValues(t *testing.T) {
 	if got := issueTypes(t, db, "ob-1100"); len(got) != 0 { // other units are kept, not judged
 		t.Errorf("ob-1100: want no issues, got %v", got)
 	}
+	// Valid FHIR value types we don't store are logged, not dropped silently.
+	wantIssue(t, db, "ob-1111", UnsupportedValueType) // valueRange
+	wantIssue(t, db, "ob-1112", UnsupportedValueType) // valueRatio in a component
 }
 
 // TestScenarioBulk loads 22,000 records built in memory (the same shape as

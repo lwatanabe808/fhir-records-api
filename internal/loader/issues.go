@@ -23,14 +23,15 @@ const (
 	InvalidFHIR      = "INVALID_FHIR"
 
 	// Our own checks on one record
-	NoPatientLink     = "NO_PATIENT_LINK"
-	MissingCode       = "MISSING_CODE"
-	MissingCodeSystem = "MISSING_CODE_SYSTEM"
-	MissingValue      = "MISSING_VALUE"
-	MultipleValues    = "MULTIPLE_VALUES"
-	MissingUnit       = "MISSING_UNIT"
-	EmptyList         = "EMPTY_LIST"
-	ImpossibleValue   = "IMPOSSIBLE_VALUE"
+	NoPatientLink        = "NO_PATIENT_LINK"
+	MissingCode          = "MISSING_CODE"
+	MissingCodeSystem    = "MISSING_CODE_SYSTEM"
+	MissingValue         = "MISSING_VALUE"
+	MultipleValues       = "MULTIPLE_VALUES"
+	UnsupportedValueType = "UNSUPPORTED_VALUE_TYPE"
+	MissingUnit          = "MISSING_UNIT"
+	EmptyList            = "EMPTY_LIST"
+	ImpossibleValue      = "IMPOSSIBLE_VALUE"
 
 	// Binaries and attachments
 	InvalidBinary            = "INVALID_BINARY"

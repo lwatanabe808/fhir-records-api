@@ -214,39 +214,40 @@ Each case below is covered by a test in [internal/loader/loader_test.go](interna
 | 16 | Code with no code system | Own check | Code system stored as null | `MISSING_CODE_SYSTEM` | warning |
 | 17 | Observation with no value | Own check | Value null | `MISSING_VALUE` | warning |
 | 18 | More than one value in an Observation | Own check | Keep the first, in a fixed order | `MULTIPLE_VALUES` | warning |
-| 19 | Number with no unit | Own check | Unit null | `MISSING_UNIT` | warning |
-| 20 | Empty list (e.g. dosage) | Own check (the schema allows it) | Stored as null | `EMPTY_LIST` | warning |
-| 21 | Impossible value: negative, over 100%, dated in the future | Own check | Hidden from the patient app, excluded from research | `IMPOSSIBLE_VALUE` | error |
-| 22 | Unexpected error in my code on one record | Recover | Keep going | `PROCESSING_ERROR` | error |
+| 19 | Value type we don't store yet (`valueRange`, `valueRatio`, `valueSampledData`, `valueTime`, `valueDateTime`, `valuePeriod`) | Own check | Value null, original kept in `raw_resources` | `UNSUPPORTED_VALUE_TYPE` | info |
+| 20 | Number with no unit | Own check | Unit null | `MISSING_UNIT` | warning |
+| 21 | Empty list (e.g. dosage) | Own check (the schema allows it) | Stored as null | `EMPTY_LIST` | warning |
+| 22 | Impossible value: negative, over 100%, dated in the future | Own check | Hidden from the patient app, excluded from research | `IMPOSSIBLE_VALUE` | error |
+| 23 | Unexpected error in my code on one record | Recover | Keep going | `PROCESSING_ERROR` | error |
 | **Binaries and attachments** |||||
-| 23 | Inline attachment (`data` in the note) | Own check | Normal case: stored in `binaries` with a generated id | none | |
-| 24 | Not valid base64 | Own check (the schema allows any string) | Data and text null | `INVALID_BINARY` | warning |
-| 25 | Over `MAX_BINARY_MB` | Own check | Data not stored | `FILE_TOO_LARGE` | warning |
-| 26 | Missing content type | Own check (the schema allows it) | `application/octet-stream` | `MISSING_BINARY_CONTENT_TYPE` | warning |
-| 27 | Badly formatted content type (`"pdf"`) | Own check | `application/octet-stream` | `INVALID_CONTENT_TYPE` | warning |
-| 28 | Label disagrees with the actual bytes | Own check (byte inspection) | Store the detected type, text null if not text | `CONTENT_TYPE_CONFLICT` | warning |
-| 29 | Note and Binary disagree on the type | Pass 2 | Trust the Binary | `CONTENT_TYPE_MISMATCH` | warning |
-| 30 | Attachment with no url and no data | Own check | No link | `MISSING_BINARY` | warning |
-| 31 | Attachment url in an invalid format | Own check | No link | `INVALID_ATTACHMENT_URL` | warning |
-| 32 | Attachment is a web address | Own check | Not fetched | `UNRESOLVABLE_ATTACHMENT` | info |
+| 24 | Inline attachment (`data` in the note) | Own check | Normal case: stored in `binaries` with a generated id | none | |
+| 25 | Not valid base64 | Own check (the schema allows any string) | Data and text null | `INVALID_BINARY` | warning |
+| 26 | Over `MAX_BINARY_MB` | Own check | Data not stored | `FILE_TOO_LARGE` | warning |
+| 27 | Missing content type | Own check (the schema allows it) | `application/octet-stream` | `MISSING_BINARY_CONTENT_TYPE` | warning |
+| 28 | Badly formatted content type (`"pdf"`) | Own check | `application/octet-stream` | `INVALID_CONTENT_TYPE` | warning |
+| 29 | Label disagrees with the actual bytes | Own check (byte inspection) | Store the detected type, text null if not text | `CONTENT_TYPE_CONFLICT` | warning |
+| 30 | Note and Binary disagree on the type | Pass 2 | Trust the Binary | `CONTENT_TYPE_MISMATCH` | warning |
+| 31 | Attachment with no url and no data | Own check | No link | `MISSING_BINARY` | warning |
+| 32 | Attachment url in an invalid format | Own check | No link | `INVALID_ATTACHMENT_URL` | warning |
+| 33 | Attachment is a web address | Own check | Not fetched | `UNRESOLVABLE_ATTACHMENT` | info |
 | **Step 4: After all lines are loaded** |||||
-| 33 | Capital letter mismatch (`Patient/Noah-Wyle`) | Pass 2 | Linked only if exactly one patient matches | `CASE_MISMATCH_REFERENCE` | warning |
-| 34 | Patient not in the file (`Patient/nwyle`) | Pass 2 | Left unlinked | `UNKNOWN_PATIENT` | warning |
-| 35 | Note links to a missing Binary | Pass 2 | Link kept, no text | `BINARY_BROKEN_REFERENCE` | warning |
-| 36 | Binary no note links to | Pass 2 | Kept, on no chart | `ORPHAN_BINARY` | info |
-| 37 | Same type and id, identical | Pass 1 | Copy skipped | `DUPLICATE_ID` | info |
-| 38 | Same type and id, changed | Pass 1 | Later version wins (unless `meta.lastUpdated` says otherwise). Older versions stay in `raw_resources` | `DUPLICATE_ID_CHANGED` | warning |
-| 39 | Different ids, same patient, test and exact time | Pass 2 | Lowest id is primary, others hidden (same or different values) | `DUPLICATE_RECORD` | warning |
-| 40 | Amended or corrected reading | Pass 2 | Replaces the others in its group (`replaced_by`). Several corrections: the lowest id wins | `SUPERSEDED` | info |
-| 41 | Same name and birth date (ignoring case, accents and punctuation), different patient ids | Pass 2 | Separate charts, counted once in research | `POSSIBLE_DUPLICATE_PATIENT` | warning |
+| 34 | Capital letter mismatch (`Patient/Noah-Wyle`) | Pass 2 | Linked only if exactly one patient matches | `CASE_MISMATCH_REFERENCE` | warning |
+| 35 | Patient not in the file (`Patient/nwyle`) | Pass 2 | Left unlinked | `UNKNOWN_PATIENT` | warning |
+| 36 | Note links to a missing Binary | Pass 2 | Link kept, no text | `BINARY_BROKEN_REFERENCE` | warning |
+| 37 | Binary no note links to | Pass 2 | Kept, on no chart | `ORPHAN_BINARY` | info |
+| 38 | Same type and id, identical | Pass 1 | Copy skipped | `DUPLICATE_ID` | info |
+| 39 | Same type and id, changed | Pass 1 | Later version wins (unless `meta.lastUpdated` says otherwise). Older versions stay in `raw_resources` | `DUPLICATE_ID_CHANGED` | warning |
+| 40 | Different ids, same patient, test and exact time | Pass 2 | Lowest id is primary, others hidden (same or different values) | `DUPLICATE_RECORD` | warning |
+| 41 | Amended or corrected reading | Pass 2 | Replaces the others in its group (`replaced_by`). Several corrections: the lowest id wins | `SUPERSEDED` | info |
+| 42 | Same name and birth date (ignoring case, accents and punctuation), different patient ids | Pass 2 | Separate charts, counted once in research | `POSSIBLE_DUPLICATE_PATIENT` | warning |
 
 **Valid records with special handling (no issue logged):**
 
 | # | Case | How it's known | Handling |
 |---|---|---|---|
-| 42 | Entered in error | `status: "entered-in-error"` | Hidden from the patient app, excluded from research |
-| 43 | Refuted diagnosis | `verificationStatus: "refuted"` | Excluded from research |
-| 44 | Code and label name different things (e.g. `proc-ti-001`: bypass code, "Cardiac Catheterization" label) | A decision, not a check | Both stored and returned, searches use the code |
+| 43 | Entered in error | `status: "entered-in-error"` | Hidden from the patient app, excluded from research |
+| 44 | Refuted diagnosis | `verificationStatus: "refuted"` | Excluded from research |
+| 45 | Code and label name different things (e.g. `proc-ti-001`: bypass code, "Cardiac Catheterization" label) | A decision, not a check | Both stored and returned, searches use the code |
 
 **What the sample file triggers:** `med-nw-003` (capital letters, linked), `obs-nw-006` (unknown patient), `obs-kl-bad-001` (name only), `cond-nw-bad-001` (no disease code), `obs-nw-002` / `obs-nw-dup-001` (A1c 7.8 vs 7.9 at the same time), `obs-ti-003` (replaced by the amended `obs-ti-005`), `med-fd-002` (empty dosage list), `note-robby-001` (`ClinicalNote` is not FHIR).
 
@@ -266,7 +267,7 @@ Besides the sample file, [testdata/scenarios](testdata/scenarios) has input file
 | `08-dates` | Partial dates, time zones, same day with no time, February 30 | Date-only readings not treated as duplicates |
 | `09-two-clinics` | Same person from two clinics, repeated and corrected records, `meta.lastUpdated` | Patients never merged, newest version kept |
 | `10-attachments` | PDF, HTML, inline data, a Binary shared by two notes, an image labeled as text | Each stored with the right type and text |
-| `11-values` | Other units, zero, negative, huge, wrong types, a missing value with a reason | Impossible hidden, every missing value logged |
+| `11-values` | Other units, zero, negative, huge, wrong types, a missing value with a reason, value types we don't store | Impossible hidden, every missing or unstored value logged |
 | `12-bulk` | 22,000 records (built by `make scenarios`, not kept in git) | Loads in about 3 seconds |
 | `13-identifiers` | Records with SSNs, accented and punctuated names | Same name and birth date flagged, SSNs never returned |
 

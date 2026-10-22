@@ -226,6 +226,12 @@ write("11-values.jsonl", [
     {**obs("ob-1108", "pt-1100", WEIGHT, "2025-01-09T08:00:00Z"), "dataAbsentReason": {"text": "Patient refused"}},
     obs("ob-1109", "pt-1100", A1C, "2025-01-10T08:00:00Z", 6.0, "%", status="preliminary"),
     obs("ob-1110", "pt-1100", A1C, "2025-01-11T08:00:00Z", 6.0, "%", status="cancelled"),
+    # Valid FHIR value types we don't store: logged, not dropped silently
+    {**obs("ob-1111", "pt-1100", loinc("2160-0", "Creatinine"), "2025-01-12T08:00:00Z"),
+     "valueRange": {"low": {"value": 1, "unit": "mg/dL"}, "high": {"value": 2, "unit": "mg/dL"}}},
+    {**obs("ob-1112", "pt-1100", loinc("85354-9", "Blood pressure panel"), "2025-01-13T08:00:00Z"),
+     "component": [{"code": loinc("8480-6", "Systolic blood pressure"),
+                    "valueRatio": {"numerator": {"value": 120}, "denominator": {"value": 80}}}]},
 ])
 
 # 13. Identifiers: records that carry SSNs, and names written different ways.

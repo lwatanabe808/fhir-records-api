@@ -342,6 +342,10 @@ func (rec *recordCtx) readValue(val fhir.Value, field, path string) (obsValue, e
 		if val.ValueCodeableConcept != nil {
 			v.valueText = val.ValueCodeableConcept.First().Name()
 		}
+	default:
+		// Valid FHIR we don't store yet, like valueRange. Log it so the value
+		// isn't lost silently; the original stays in raw_resources.
+		return v, rec.issue(UnsupportedValueType, Info, path, field+" is valid FHIR but not stored yet", "value stored as null, kept in raw_resources")
 	}
 	return v, nil
 }
