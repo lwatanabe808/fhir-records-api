@@ -278,6 +278,110 @@
           }
         },
         {
+          "name": "Cohort: keyword \"diabetes\" (broad)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/research/cohort?condition=diabetes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "research",
+                "cohort"
+              ],
+              "query": [
+                {
+                  "key": "condition",
+                  "value": "diabetes"
+                }
+              ]
+            },
+            "description": "A keyword matches the condition's name or label, so it also finds prediabetes."
+          }
+        },
+        {
+          "name": "Cohort: disease code, type 2 diabetes only",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/research/cohort?condition=44054006",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "research",
+                "cohort"
+              ],
+              "query": [
+                {
+                  "key": "condition",
+                  "value": "44054006"
+                }
+              ]
+            },
+            "description": "SNOMED CT disease code 44054006. Codes are exact."
+          }
+        },
+        {
+          "name": "Cohort: type 2 diabetes on Metformin (codes)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/research/cohort?condition=44054006&medication=860975",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "research",
+                "cohort"
+              ],
+              "query": [
+                {
+                  "key": "condition",
+                  "value": "44054006"
+                },
+                {
+                  "key": "medication",
+                  "value": "860975"
+                }
+              ]
+            },
+            "description": "SNOMED CT disease code 44054006 and RxNorm drug code 860975."
+          }
+        },
+        {
+          "name": "Cohort: type 2 diabetes, excluding high cholesterol (codes)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/research/cohort?condition=44054006&excludeCondition=13644009",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "research",
+                "cohort"
+              ],
+              "query": [
+                {
+                  "key": "condition",
+                  "value": "44054006"
+                },
+                {
+                  "key": "excludeCondition",
+                  "value": "13644009"
+                }
+              ]
+            },
+            "description": "Exclusions take codes too. SNOMED CT 13644009 is hypercholesterolemia."
+          }
+        },
+        {
           "name": "Cohort: women aged 30 to 45",
           "request": {
             "method": "GET",

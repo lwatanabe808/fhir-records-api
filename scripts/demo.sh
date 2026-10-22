@@ -27,6 +27,10 @@ show "Notes with decoded text" "/patients/noah-wyle/notes"
 
 # Research partners (B2B)
 show "Cohort: diabetes with latest A1c (LOINC 4548-4) of 7 or more (de-identified)" "/research/cohort?condition=diabetes&lab=4548-4&labMin=7"
+show "Cohort by keyword: \"diabetes\" is broad and also matches prediabetes" "/research/cohort?condition=diabetes"
+show "Cohort by disease code: type 2 diabetes only (SNOMED 44054006)" "/research/cohort?condition=44054006"
+show "Cohort by codes: type 2 diabetes on Metformin 500 MG (RxNorm 860975)" "/research/cohort?condition=44054006&medication=860975"
+show "Cohort excluding by code: type 2 diabetes without hypercholesterolemia (SNOMED 13644009)" "/research/cohort?condition=44054006&excludeCondition=13644009"
 show "Cohort: women aged 30 to 45" "/research/cohort?gender=female&minAge=30&maxAge=45"
 show "Cohort with exclusion: diabetes, but not high cholesterol" "/research/cohort?condition=diabetes&excludeCondition=hypercholesterolemia"
 show "Cohort by procedure" "/research/cohort?procedure=colonoscopy"
