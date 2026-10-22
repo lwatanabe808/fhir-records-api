@@ -9,6 +9,7 @@ The full list. The README keeps the most important ones.
 - **Exact decimals.** Lab values are stored as floating point numbers, which is fine for filtering and display but drops FHIR's decimal precision (`7.80` vs `7.8`). The original text is kept in `raw_resources`; a clean column for it would be next.
 - **Code checks against LOINC and SNOMED** through a terminology server, so a code that doesn't exist gets flagged. Today only the presence of a code and its code system is checked.
 - **Searching by code families** using the SNOMED hierarchy, so `condition` can mean "every kind of diabetes mellitus" without matching prediabetes. Today a keyword search is broad and a code search is exact.
+- **Keeping every code, not just one.** Lab tests, components, conditions and their statuses, medications, procedures and note types can each list several codes. Today we keep one, the standard code or else the first. Storing every code in its own row would let a search match any of them, including a clinic's own codes.
 - **Fetch web address attachments** from the source system using the patient's portal connection, and store large files in a private, encrypted S3 bucket, served through short-lived pre-signed URLs.
 - **More record types,** like Immunization and AllergyIntolerance, each with its own checks and clean table, so they can appear on the patient's chart.
 - **A combined timeline** of every record type for a patient, newest first.
@@ -19,7 +20,6 @@ The full list. The README keeps the most important ones.
 - **Cross-checks between values,** like a blood pressure whose systolic (top) number isn't higher than its diastolic (bottom) number.
 - **Implausible values** (possible, but likely a typo, like an A1c of 78%): ranges per lab test, reviewed by a clinician, or learned from the data with percentiles rather than means, which outliers distort.
 - **Code and label checks** using medical synonym data or an LLM that flags suspicious pairs for a person to review.
-- **Small-count suppression in cohort results** too (the dataset profile already hides small groups), so a very small cohort can't single out a person.
 - **FHIR Bundles** unpacked when a line contains one, and contained resources (`#id` attachments).
 - **Converting lab units** to one standard unit per test, so `labMin` and `labMax` compare like with like.
 - **Patient links by medical record number** (`subject.identifier`), not just by id.

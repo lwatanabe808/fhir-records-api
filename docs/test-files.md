@@ -11,7 +11,7 @@ Besides the sample file, [testdata/scenarios](../testdata/scenarios) has input f
 | `05-pretty-printed` | One record spread over many lines | Fragments flagged, records around it load |
 | `06-unsupported-types` | Encounter, Immunization, Bundle, a misspelled type | Kept raw, still found by patient |
 | `07-patient-links` | Ids that differ only by capital letters, links to groups and web addresses, empty links | Ambiguous links never guessed |
-| `08-dates` | Partial dates, time zones, same day with no time, February 30 | Date-only readings not treated as duplicates |
+| `08-dates` | Partial dates, time zones, same day with no time, February 30 | Readings with a date and no time not treated as duplicates |
 | `09-two-clinics` | Same person from two clinics, repeated and corrected records, `meta.lastUpdated` | Patients never merged, newest version kept |
 | `10-attachments` | PDF, HTML, inline data, a Binary shared by two notes, an image labeled as text | Each stored with the right type and text |
 | `11-values` | Other units, zero, negative, huge, wrong types, a missing value with a reason, value types we don't store | Impossible hidden, every missing or unstored value logged |

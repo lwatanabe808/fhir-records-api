@@ -148,8 +148,8 @@ write("07-patient-links.jsonl", [
     {**obs("ob-706", "x", A1C, "2025-01-07T08:00:00Z", 6.0, "%"), "subject": None},
 ])
 
-# 08. Dates: partial dates, time zones, date-only duplicates.
-#     Expect: date-only readings on the same day are NOT grouped as duplicates.
+# 08. Dates: partial dates, time zones, duplicates with a date and no time.
+#     Expect: readings with a date and no time on the same day are NOT grouped as duplicates.
 write("08-dates.jsonl", [
     patient("pt-800", ["Tim"], "Zone", "1950-05", deceasedDateTime="2024-03-01T00:00:00Z"),
     obs("ob-800", "pt-800", WEIGHT, "2020", 70, "kg"),

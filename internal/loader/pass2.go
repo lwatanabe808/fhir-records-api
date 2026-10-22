@@ -236,8 +236,8 @@ type obsRow struct {
 }
 
 // groupObservations finds lab results that look like the same reading: different
-// ids, but the same patient, lab test code and exact time (date-only times are
-// never grouped, since two tests on one day can be real). Each group is
+// ids, but the same patient, lab test code and exact time (results with a date and
+// no time are never grouped, since two tests on one day can be real). Each group is
 // resolved by resolveGroup.
 
 // Try to find observations with different id's but the same results.
