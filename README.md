@@ -148,12 +148,6 @@ Found by stress testing with tricky records and up to 100,000 patients:
 - **Patient links by medical record number, FHIR Bundles, and drugs given by reference** aren't read. Each is logged as an issue and kept raw.
 - **Scale:** 100,000 patients take about 44 seconds to load and 1.3 seconds for a lab search, both growing in a straight line.
 
-## A decision I'm not fully satisfied with
-
-> *Draft. Replace with your own choice before recording.*
-
-When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becomes the primary value. It's predictable and the conflict is always visible, but the choice itself is arbitrary. With more time I'd add a review queue where someone on the data team picks the correct value, and keep that decision across reloads instead of rebuilding from the file each time.
-
 ## With more time
 
 - Linking patients through user accounts
