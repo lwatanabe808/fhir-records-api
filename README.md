@@ -171,9 +171,6 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 - De-identified note search
 - Implausible values
 - Source system per record
-- More record types
-
-Each one, with a simple way to build it, is in [docs/with-more-time.md](docs/with-more-time.md).
 
 ## Project layout
 
@@ -186,7 +183,7 @@ internal/store/      database setup and schema.sql
 internal/api/        HTTP endpoints (patients, research, internal)
 data/                the sample data file
 testdata/            files with planted problems, and the scripts that build them
-docs/                validation cases, test files, status values, future work
+docs/                validation cases, test files, status values
 scripts/demo.sh      cURL calls for every endpoint
 postman/             Postman collection for every endpoint
 ```
