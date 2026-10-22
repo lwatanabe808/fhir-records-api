@@ -163,14 +163,14 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 
 ## With more time
 
-- **Loading new files as they arrive,** with a load id per file, instead of rebuilding on every start.
+- **Linking patients through user accounts.** Patients confirm which clinic records are theirs, so their charts can be combined safely, research counts become exact, and research ids can be random instead of derived from the patient id.
+- **Loading new files as they arrive,** with a load id per file, instead of rebuilding the database on every start.
 - **Converting lab units** to one standard unit per test, so `labMin` and `labMax` compare like with like.
-- **Searching by code families** using the SNOMED hierarchy, so "diabetes" means every kind of diabetes but not prediabetes.
-- **Keeping every code, not just one.** Lab tests, components, conditions and their statuses, medications, procedures and note types can each list several codes. Today we keep one, the standard code or else the first. Storing every code in its own row would let a search match any of them, including a clinic's own codes.
-- **De-identified note search** for research, which needs the free text cleaned of names and places first.
-- **More record types,** like Immunization and AllergyIntolerance.
-
-The full list is in [docs/with-more-time.md](docs/with-more-time.md).
+- **Smarter code search.** Keep every code a record lists, not just one. Also use the SNOMED tree, which goes from general to specific: "diabetes mellitus" has "type 1" and "type 2" under it. A search for the general code would then find every kind of diabetes, but not prediabetes, which sits elsewhere in the tree. Today only the exact code matches.
+- **De-identified note search** for research, which needs names and places removed from the free text first.
+- **Implausible values:** results that are possible but likely a typo, like an A1c of 78%. Flag them using ranges per lab test, reviewed by a clinician.
+- **Source system per record.** The data doesn't say which clinic sent each record, which matters when a patient's care spans several systems.
+- **More record types,** like Immunization and AllergyIntolerance, each with its own checks, so they can appear on the patient's chart.
 
 ## Project layout
 
@@ -183,7 +183,7 @@ internal/store/      database setup and schema.sql
 internal/api/        HTTP endpoints (patients, research, internal)
 data/                the sample data file
 testdata/            files with planted problems, and the scripts that build them
-docs/                validation cases, test files, status values, future work
+docs/                validation cases, test files, status values
 scripts/demo.sh      cURL calls for every endpoint
 postman/             Postman collection for every endpoint
 ```
