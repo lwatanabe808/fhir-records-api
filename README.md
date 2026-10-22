@@ -120,6 +120,17 @@ Every error uses the same shape: `{"error": {"code": "INVALID_PARAMETER", "messa
 
 Partners describe the patients they need as **inclusion and exclusion criteria**, so both are supported: `condition=diabetes&excludeCondition=heart failure&procedure=colonoscopy`.
 
+**Search by standard medical code or by keyword.** Each filter takes either an exact code from the standard code system, or a word in the record's name or label (ignoring capitals):
+
+| Filter | Code system | Exact code | Keyword |
+|---|---|---|---|
+| `condition`, `excludeCondition` | SNOMED CT disease codes | `44054006` (type 2 diabetes) | `diabetes` |
+| `medication`, `excludeMedication` | RxNorm drug codes | `860975` (Metformin 500 MG) | `metformin` |
+| `procedure`, `excludeProcedure` | SNOMED CT procedure codes | `410188000` (diabetic eye exam) | `eye exam` |
+| `lab` | LOINC lab test codes | `4548-4` (A1c) | not supported: `labMin` and `labMax` compare numbers, which only makes sense for one specific test |
+
+Codes are exact, which is what partners use in study criteria. Keywords are for exploring and are broad: `diabetes` also matches "Prediabetes". Grouping related codes (every kind of diabetes, but not prediabetes) would need the SNOMED code hierarchy, listed under "With more time".
+
 **Honest counts.** The same person can arrive from two clinics under two patient ids. The loader never merges them, so every research count gives three numbers: `countWithoutDuplicates` (the conservative number, possible duplicates counted once), `countIncludingPossibleDuplicates` (every patient id), and `possibleDuplicatePatients` (how many were combined). The dataset profile uses the same names with `patients` in place of `count`. In cohort results, each patient has `possibleDuplicateOf`: the research ids it may duplicate, or `[]` when there are none. A count a partner can trust matters more than a big one.
 
 **Why this one:** it's how Novellia earns revenue. Clinical trials often struggle to find enough eligible patients, and Novellia's advantage is complete, cleaned history across many providers. This endpoint turns the cleaned data into that answer.
@@ -295,6 +306,7 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 - **Source system per record.** The data doesn't say which clinic each record came from, which matters when a patient's care spans several systems.
 - **Exact decimals.** Lab values are stored as floating point numbers, which is fine for filtering and display but drops FHIR's decimal precision (`7.80` vs `7.8`). The original text is kept in `raw_resources`; a clean column for it would be next.
 - **Code checks against LOINC and SNOMED** through a terminology server, so a code that doesn't exist gets flagged. Today only the presence of a code and its code system is checked.
+- **Searching by code families** using the SNOMED hierarchy, so `condition` can mean "every kind of diabetes mellitus" without matching prediabetes. Today a keyword search is broad and a code search is exact.
 - **Fetch web address attachments** from the source system using the patient's portal connection, and store large files in a private, encrypted S3 bucket, served through short-lived pre-signed URLs.
 - **More record types,** like Immunization and AllergyIntolerance, each with its own checks and clean table, so they can appear on the patient's chart.
 - **A combined timeline** of every record type for a patient, newest first.
