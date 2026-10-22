@@ -150,14 +150,14 @@ Found by stress testing with tricky records and up to 100,000 patients:
 
 ## With more time
 
-- Linking patients through user accounts
-- Loading new files as they arrive
-- Note files in S3
-- Converting lab units
-- Smarter code search
-- De-identified notes that life science companies can read and search
-- Implausible values
-- Source system per record
+- **Linking patients through user accounts:** patients confirm which clinic records are theirs.
+- **Loading new files as they arrive:** add to the data instead of rebuilding it.
+- **Note files in S3:** keep files out of the database.
+- **Converting lab units:** so lab filters compare like with like.
+- **Smarter code search:** match any code a record lists, and use the SNOMED tree for families of codes.
+- **De-identified notes that life science companies can read and search:** remove names and places first.
+- **Implausible values:** flag likely typos, like an A1c of 78%.
+- **Source system per record:** know which clinic sent each record.
 
 ## Project layout
 
