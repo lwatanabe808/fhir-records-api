@@ -163,15 +163,17 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 
 ## With more time
 
-- **Linking patients through user accounts.** Patients confirm which clinic records are theirs, so their charts can be combined safely, research counts become exact, and research ids can be random instead of derived from the patient id.
-- **Loading new files as they arrive,** with a load id per file, instead of rebuilding the database on every start.
-- **Note files in S3.** Today each note's file is decoded and stored in the database. Instead, store the file in a private, encrypted S3 bucket, and keep only its location, type, size and readable text in the database. The API checks who's asking, then returns a short-lived download link.
-- **Converting lab units** to one standard unit per test, so `labMin` and `labMax` compare like with like.
-- **Smarter code search.** Keep every code a record lists, not just one. Also use the SNOMED tree, which goes from general to specific: "diabetes mellitus" has "type 1" and "type 2" under it. A search for the general code would then find every kind of diabetes, but not prediabetes, which sits elsewhere in the tree. Today only the exact code matches.
-- **De-identified note search** for research, which needs names and places removed from the free text first.
-- **Implausible values:** results that are possible but likely a typo, like an A1c of 78%. Flag them using ranges per lab test, reviewed by a clinician.
-- **Source system per record.** The data doesn't say which clinic sent each record, which matters when a patient's care spans several systems.
-- **More record types,** like Immunization and AllergyIntolerance, each with its own checks, so they can appear on the patient's chart.
+- Linking patients through user accounts
+- Loading new files as they arrive
+- Note files in S3
+- Converting lab units
+- Smarter code search
+- De-identified note search
+- Implausible values
+- Source system per record
+- More record types
+
+Each one, with a simple way to build it, is in [docs/with-more-time.md](docs/with-more-time.md).
 
 ## Project layout
 
@@ -184,7 +186,7 @@ internal/store/      database setup and schema.sql
 internal/api/        HTTP endpoints (patients, research, internal)
 data/                the sample data file
 testdata/            files with planted problems, and the scripts that build them
-docs/                validation cases, test files, status values
+docs/                validation cases, test files, status values, future work
 scripts/demo.sh      cURL calls for every endpoint
 postman/             Postman collection for every endpoint
 ```
