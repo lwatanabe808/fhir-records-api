@@ -165,6 +165,7 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 
 - **Linking patients through user accounts.** Patients confirm which clinic records are theirs, so their charts can be combined safely, research counts become exact, and research ids can be random instead of derived from the patient id.
 - **Loading new files as they arrive,** with a load id per file, instead of rebuilding the database on every start.
+- **Note files in S3.** Today each note's file is decoded and stored in the database. Instead, store the file in a private, encrypted S3 bucket, and keep only its location, type, size and readable text in the database. The API checks who's asking, then returns a short-lived download link.
 - **Converting lab units** to one standard unit per test, so `labMin` and `labMax` compare like with like.
 - **Smarter code search.** Keep every code a record lists, not just one. Also use the SNOMED tree, which goes from general to specific: "diabetes mellitus" has "type 1" and "type 2" under it. A search for the general code would then find every kind of diabetes, but not prediabetes, which sits elsewhere in the tree. Today only the exact code matches.
 - **De-identified note search** for research, which needs names and places removed from the free text first.
