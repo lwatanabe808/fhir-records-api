@@ -168,7 +168,7 @@ When two records disagree (A1c 7.8 vs 7.9 at the same time), the lowest id becom
 - Note files in S3
 - Converting lab units
 - Smarter code search
-- De-identified note search
+- De-identified notes that life science companies can read and search
 - Implausible values
 - Source system per record
 
