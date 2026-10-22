@@ -73,9 +73,10 @@ func (rec *recordCtx) patientRef(subject *fhir.Reference) (string, error) {
 
 // code checks a CodeableConcept (a lab test, disease, procedure or drug code)
 // and reports a missing code or a missing code system.
-func (rec *recordCtx) code(field, what string, concept fhir.CodeableConcept) (fhir.Coding, error) {
-	// finds the first code that has a code
-	c := concept.First()
+// standards are the code systems to prefer, like fhir.LOINC for a lab test.
+func (rec *recordCtx) code(field, what string, concept fhir.CodeableConcept, standards ...string) (fhir.Coding, error) {
+	// the standard code if there is one, otherwise the first code
+	c := concept.Prefer(standards...)
 	if c.Code == "" {
 		detail := fmt.Sprintf("no %s", what)
 		if c.Text != "" {

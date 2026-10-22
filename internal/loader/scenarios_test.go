@@ -160,6 +160,8 @@ func TestScenarioValues(t *testing.T) {
 	// Valid FHIR value types we don't store are logged, not dropped silently.
 	wantIssue(t, db, "ob-1111", UnsupportedValueType) // valueRange
 	wantIssue(t, db, "ob-1112", UnsupportedValueType) // valueRatio in a component
+	// The standard LOINC code is kept even when the clinic's own code is listed first.
+	wantValue(t, db, `SELECT lab_test_code FROM observations WHERE id = 'ob-1113'`, "4548-4")
 }
 
 // TestScenarioBulk loads 22,000 records built in memory (the same shape as

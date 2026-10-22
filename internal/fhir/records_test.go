@@ -20,3 +20,24 @@ func TestFirstSkipsEntriesWithoutCode(t *testing.T) {
 		t.Errorf("want only the label, got %+v", got)
 	}
 }
+
+func TestPreferPicksTheStandardCode(t *testing.T) {
+	var c CodeableConcept
+	json.Unmarshal([]byte(`{"text": "A1c", "coding": [
+		{"system": "http://clinic.local/labs", "code": "HBA1C"},
+		{"system": "http://loinc.org", "code": "4548-4", "display": "Hemoglobin A1c"}]}`), &c)
+	if got := c.Prefer(LOINC); got.Code != "4548-4" || got.System != LOINC || got.Text != "A1c" {
+		t.Errorf("want the LOINC code even though it is second, got %+v", got)
+	}
+	if got := c.Prefer(SNOMED); got.Code != "HBA1C" {
+		t.Errorf("no SNOMED code: want the first code, got %+v", got)
+	}
+
+	var dx CodeableConcept
+	json.Unmarshal([]byte(`{"coding": [
+		{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "E11.9"},
+		{"system": "http://snomed.info/sct", "code": "44054006"}]}`), &dx)
+	if got := dx.Prefer(SNOMED, ICD10); got.Code != "44054006" {
+		t.Errorf("want SNOMED before ICD-10, got %+v", got)
+	}
+}

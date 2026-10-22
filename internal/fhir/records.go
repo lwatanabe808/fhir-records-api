@@ -32,6 +32,27 @@ func (c CodeableConcept) First() Coding {
 	return result
 }
 
+// Standard code systems. US Core (the US rules for FHIR)
+const (
+	LOINC  = "http://loinc.org"                            // lab tests
+	SNOMED = "http://snomed.info/sct"                      // diseases and procedures
+	RxNorm = "http://www.nlm.nih.gov/research/umls/rxnorm" // drugs
+	ICD10  = "http://hl7.org/fhir/sid/icd-10-cm"           // diseases, also allowed
+	CPT    = "http://www.ama-assn.org/go/cpt"              // procedures, also allowed
+)
+
+// finds the first record that uses the standard code system
+func (c CodeableConcept) Prefer(systems ...string) Coding {
+	for _, system := range systems {
+		for _, coding := range c.Coding {
+			if coding.System == system && coding.Code != "" {
+				return Coding{System: coding.System, Code: coding.Code, Display: coding.Display, Text: c.Text}
+			}
+		}
+	}
+	return c.First()
+}
+
 // Reference is a link to another record, like {"reference": "Patient/p1"}.
 type Reference struct {
 	Reference string `json:"reference"`

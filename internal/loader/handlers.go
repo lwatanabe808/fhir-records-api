@@ -153,7 +153,7 @@ func insertObservation(rec *recordCtx) error {
 	if err != nil {
 		return err
 	}
-	code, err := rec.code("code", "lab test code", o.Code)
+	code, err := rec.code("code", "lab test code", o.Code, fhir.LOINC)
 	if err != nil {
 		return err
 	}
@@ -215,7 +215,7 @@ func insertObservation(rec *recordCtx) error {
 			return err
 		}
 		impossible = impossible || partImpossible
-		comps = append(comps, component{comp.Code.First(), v})
+		comps = append(comps, component{comp.Code.Prefer(fhir.LOINC), v})
 	}
 
 	if err := rec.l.exec(`
@@ -360,7 +360,7 @@ func insertCondition(rec *recordCtx) error {
 	if err != nil {
 		return err
 	}
-	code, err := rec.code("code", "disease code", c.Code)
+	code, err := rec.code("code", "disease code", c.Code, fhir.SNOMED, fhir.ICD10)
 	if err != nil {
 		return err
 	}
@@ -394,7 +394,7 @@ func insertMedication(rec *recordCtx) error {
 			"drug is a link to a Medication record, which is not supported yet", "drug code stored as null"); err != nil {
 			return err
 		}
-	} else if code, err = rec.code("medicationCodeableConcept", "drug code", m.MedicationCodeableConcept); err != nil {
+	} else if code, err = rec.code("medicationCodeableConcept", "drug code", m.MedicationCodeableConcept, fhir.RxNorm); err != nil {
 		return err
 	}
 	prescribedAt, err := rec.date("authoredOn", m.AuthoredOn)
@@ -427,7 +427,7 @@ func insertProcedure(rec *recordCtx) error {
 	if err != nil {
 		return err
 	}
-	code, err := rec.code("code", "procedure code", p.Code)
+	code, err := rec.code("code", "procedure code", p.Code, fhir.SNOMED, fhir.CPT)
 	if err != nil {
 		return err
 	}

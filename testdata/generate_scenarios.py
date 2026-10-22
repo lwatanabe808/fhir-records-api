@@ -232,6 +232,10 @@ write("11-values.jsonl", [
     {**obs("ob-1112", "pt-1100", loinc("85354-9", "Blood pressure panel"), "2025-01-13T08:00:00Z"),
      "component": [{"code": loinc("8480-6", "Systolic blood pressure"),
                     "valueRatio": {"numerator": {"value": 120}, "denominator": {"value": 80}}}]},
+    # The clinic lists its own code first and the standard LOINC code second
+    {**obs("ob-1113", "pt-1100", {"coding": [{"system": "http://clinic.local/labs", "code": "HBA1C"},
+                                             {"system": "http://loinc.org", "code": "4548-4", "display": "Hemoglobin A1c"}]},
+           "2025-01-14T08:00:00Z", 8.1, "%")},
 ])
 
 # 13. Identifiers: records that carry SSNs, and names written different ways.
